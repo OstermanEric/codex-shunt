@@ -13,15 +13,20 @@ worker unless `codex login status` reports ChatGPT authentication.
 
 ## Quick start
 
-After installing the plugin and trusting its hooks, add the recommended
-`shunt` routing-command alias to zsh:
+After installing the plugin and trusting its hooks, install the `shunt` command
+into your user-local command directory:
 
 ```bash
-printf '%s\n' \
-  'alias shunt="$HOME/plugins/codex-shunt/scripts/codex-shunt"' \
-  >> "$HOME/.zshrc"
+"$HOME/plugins/codex-shunt/scripts/install-command"
+```
 
-source "$HOME/.zshrc"
+The installer creates `~/.local/bin/shunt` without changing shell startup
+files. If `~/.local/bin` is not already on `PATH`, add it to your shell profile
+and open a new shell:
+
+```bash
+printf '%s\n' 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.zprofile"
+export PATH="$HOME/.local/bin:$PATH"
 ```
 
 Then verify the setup and begin in observation-only mode:
@@ -227,26 +232,30 @@ To review hook trust explicitly, launch the Codex CLI and enter `/hooks`:
 Confirm that the Codex Shunt `PreToolUse` and `PostToolUse` hooks are enabled
 and trusted. Codex requires another review whenever a hook definition changes.
 
-## Install the `shunt` command alias
+## Install the `shunt` command
 
-The documented command name is `shunt`. The permanent zsh alias is installed
-by the Quick start command above. Verify it with:
+The documented command name is `shunt`. The installer creates a symlink in
+`~/.local/bin`, so the command works in shells, scripts, and other tools that
+use `PATH`:
 
 ```bash
-type shunt
+"$HOME/plugins/codex-shunt/scripts/install-command"
+command -v shunt
 shunt --version
 ```
 
-For the current shell only, without changing `.zshrc`:
+Set `CODEX_SHUNT_BIN_DIR` to install somewhere other than `~/.local/bin`:
 
 ```bash
-alias shunt="$HOME/plugins/codex-shunt/scripts/codex-shunt"
+CODEX_SHUNT_BIN_DIR="$HOME/bin" \
+  "$HOME/plugins/codex-shunt/scripts/install-command"
 ```
 
-If the alias is unavailable during recovery, the full command remains:
+To upgrade the command after changing or updating the source, rerun the
+installer. To remove only the symlink managed by this checkout:
 
 ```bash
-"$HOME/plugins/codex-shunt/scripts/codex-shunt" doctor
+"$HOME/plugins/codex-shunt/scripts/install-command" --uninstall
 ```
 
 To reinstall after changing the source, use the plugin-creator cachebuster flow:

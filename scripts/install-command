@@ -1,0 +1,66 @@
+#!/bin/sh
+set -eu
+
+plugin_root=$(CDPATH= cd -P "$(dirname "$0")/.." && pwd)
+runner="$plugin_root/scripts/codex-shunt"
+bin_dir=${CODEX_SHUNT_BIN_DIR:-$HOME/.local/bin}
+command_path="$bin_dir/shunt"
+
+if [ ! -x "$runner" ]; then
+  printf 'Codex Shunt runner is missing or not executable: %s\n' "$runner" >&2
+  exit 1
+fi
+
+mkdir -p "$bin_dir"
+
+if [ "${1:-}" = "--uninstall" ]; then
+  if [ ! -L "$command_path" ]; then
+    if [ -e "$command_path" ]; then
+      printf 'Refusing to remove non-symlink: %s\n' "$command_path" >&2
+      exit 1
+    fi
+    printf 'Codex Shunt command is not installed at %s\n' "$command_path"
+    exit 0
+  fi
+
+  existing_target=$(readlink "$command_path")
+  if [ "$existing_target" != "$runner" ]; then
+    printf 'Refusing to remove a symlink not managed by this checkout: %s\n' "$command_path" >&2
+    exit 1
+  fi
+
+  rm "$command_path"
+  printf 'Removed %s\n' "$command_path"
+  exit 0
+fi
+
+if [ "${1:-}" != "" ]; then
+  printf 'Usage: %s [--uninstall]\n' "$0" >&2
+  exit 2
+fi
+
+if [ -e "$command_path" ] || [ -L "$command_path" ]; then
+  if [ ! -L "$command_path" ]; then
+    printf 'Refusing to overwrite existing non-symlink: %s\n' "$command_path" >&2
+    exit 1
+  fi
+
+  existing_target=$(readlink "$command_path")
+  if [ "$existing_target" != "$runner" ]; then
+    printf 'Refusing to overwrite symlink not managed by this checkout: %s\n' "$command_path" >&2
+    exit 1
+  fi
+fi
+
+ln -sfn "$runner" "$command_path"
+printf 'Installed shunt -> %s\n' "$runner"
+
+case ":${PATH:-}:" in
+  *:"$bin_dir":*) ;;
+  *)
+    printf 'Add this directory to PATH before using shunt:\n'
+    printf '  export PATH="%s:$PATH"\n' "$bin_dir"
+    ;;
+esac
+
+printf 'Run: shunt doctor\n'
