@@ -46,6 +46,8 @@ class DatabaseTests(unittest.TestCase):
             )
             result = aggregate("all")
             self.assertEqual(result["routing"]["estimated_tokens"], 25000)
+            self.assertEqual(result["routing"]["estimated_intercepted_tokens"], 0)
+            self.assertEqual(result["routing"]["enforced"], 0)
             self.assertEqual(result["workers"]["input_tokens"], 1000)
             self.assertEqual(result["workers"]["valid_citations"], 2)
 

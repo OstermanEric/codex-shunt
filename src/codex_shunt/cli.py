@@ -39,6 +39,72 @@ def _human_number(value: int | float) -> str:
     return f"{number:.2f}B"
 
 
+_ANSI = {
+    "bold": "1",
+    "dim": "2",
+    "red": "31",
+    "green": "32",
+    "yellow": "33",
+    "cyan": "36",
+}
+
+
+def _color_enabled(mode: str) -> bool:
+    if mode == "always":
+        return True
+    if mode == "never" or "NO_COLOR" in os.environ:
+        return False
+    return sys.stdout.isatty() and os.environ.get("TERM") != "dumb"
+
+
+def _paint(text: str, *styles: str, enabled: bool) -> str:
+    if not enabled:
+        return text
+    codes = ";".join(_ANSI[style] for style in styles)
+    return f"\033[{codes}m{text}\033[0m"
+
+
+def _rate_style(rate: float, total: int) -> str:
+    if total == 0:
+        return "dim"
+    if rate >= 0.9:
+        return "green"
+    if rate >= 0.6:
+        return "yellow"
+    return "red"
+
+
+def _period_label(since: str) -> str:
+    normalized = since.strip().lower()
+    if normalized == "all":
+        return "all time"
+    if normalized[:-1].isdigit() and normalized.endswith(("h", "d")):
+        return f"last {normalized}"
+    return f"since {since}"
+
+
+def _plural(count: int, singular: str, plural: str | None = None) -> str:
+    return singular if count == 1 else (plural or f"{singular}s")
+
+
+def _metric_line(
+    label: str,
+    value: str,
+    detail: str,
+    *,
+    value_style: str,
+    color: bool,
+) -> str:
+    label_cell = _paint(f"{label:<18}", "bold", "cyan", enabled=color)
+    value_cell = _paint(f"{value:<18}", "bold", value_style, enabled=color)
+    return f"{label_cell} {value_cell} {detail}"
+
+
+def _detail_line(label: str, detail: str, *, color: bool) -> str:
+    label_cell = _paint(f"{label:<12}", "bold", enabled=color)
+    return f"{label_cell} {detail}"
+
+
 def _render_outcome(outcome: Any, as_json: bool) -> None:
     payload = {
         "run_id": outcome.run_id,
@@ -195,18 +261,183 @@ def _stats_payload(since: str) -> dict[str, Any]:
     workers = payload["workers"]
     total_routes = int(routing["total"] or 0)
     routed = int(routing["routed"] or 0)
+    enforced = int(routing["enforced"] or 0)
     worker_total = int(workers["total"] or 0)
     succeeded = int(workers["succeeded"] or 0)
     citations = int(workers["citations"] or 0)
     valid = int(workers["valid_citations"] or 0)
+    worker_credits = float(workers["worker_credits"] or 0)
+    sol_credits = float(workers["sol_credits"] or 0)
+    credit_difference = sol_credits - worker_credits
     payload["derived"] = {
         "routing_share": routed / total_routes if total_routes else 0.0,
+        "enforced_share": enforced / routed if routed else 0.0,
         "worker_success_rate": succeeded / worker_total if worker_total else 0.0,
         "citation_validity_rate": valid / citations if citations else 0.0,
-        "worker_stage_credit_difference": float(workers["sol_credits"] or 0)
-        - float(workers["worker_credits"] or 0),
+        "worker_stage_credit_difference": credit_difference,
+        "worker_stage_credit_savings_rate": (
+            credit_difference / sol_credits if sol_credits else 0.0
+        ),
     }
     return payload
+
+
+def _render_stats(payload: dict[str, Any], since: str, *, color: bool) -> str:
+    routing = payload["routing"]
+    workers = payload["workers"]
+    derived = payload["derived"]
+    routing_total = int(routing["total"] or 0)
+    routed = int(routing["routed"] or 0)
+    enforced = int(routing["enforced"] or 0)
+    worker_total = int(workers["total"] or 0)
+    succeeded = int(workers["succeeded"] or 0)
+    failed = worker_total - succeeded
+    citations = int(workers["citations"] or 0)
+    valid_citations = int(workers["valid_citations"] or 0)
+    escalations = int(workers["escalations"] or 0)
+    savings = float(derived["worker_stage_credit_difference"])
+    savings_rate = float(derived["worker_stage_credit_savings_rate"])
+
+    lines = [
+        f"{_paint('Codex Shunt', 'bold', 'cyan', enabled=color)}"
+        f"  {_paint('·', 'dim', enabled=color)}  {_period_label(since)}",
+        "",
+    ]
+
+    if worker_total:
+        if savings_rate >= 0:
+            savings_detail = f"estimated · {savings_rate:.1%} less than Sol-equivalent"
+        else:
+            savings_detail = f"estimated · {abs(savings_rate):.1%} more than Sol-equivalent"
+        savings_value = f"{savings:.4f} credits"
+        savings_style = "green" if savings > 0 else ("red" if savings < 0 else "dim")
+    else:
+        savings_value = "—"
+        savings_detail = "no worker usage yet"
+        savings_style = "dim"
+    lines.append(
+        _metric_line(
+            "CREDITS SAVED",
+            savings_value,
+            savings_detail,
+            value_style=savings_style,
+            color=color,
+        )
+    )
+
+    routable_context = int(routing["estimated_tokens"] or 0)
+    context_tokens = int(routing["estimated_intercepted_tokens"] or 0)
+    if routable_context > context_tokens:
+        context_detail = (
+            f"estimated · {_human_number(routable_context - context_tokens)} more identified"
+        )
+    elif context_tokens:
+        context_detail = "estimated primary-model context"
+    else:
+        context_detail = "no intercepted context"
+    lines.append(
+        _metric_line(
+            "CONTEXT AVOIDED",
+            f"{_human_number(context_tokens)} tokens",
+            context_detail,
+            value_style="green" if context_tokens else "dim",
+            color=color,
+        )
+    )
+
+    success_value = f"{derived['worker_success_rate']:.1%}" if worker_total else "—"
+    success_detail = (
+        f"{succeeded:,} of {worker_total:,} worker {_plural(worker_total, 'run')}"
+        if worker_total
+        else "no worker runs"
+    )
+    lines.append(
+        _metric_line(
+            "SUCCESS RATE",
+            success_value,
+            success_detail,
+            value_style=_rate_style(derived["worker_success_rate"], worker_total),
+            color=color,
+        )
+    )
+
+    citation_value = f"{derived['citation_validity_rate']:.1%}" if citations else "—"
+    citation_detail = (
+        f"{valid_citations:,} of {citations:,} citations valid"
+        if citations
+        else "no citations checked"
+    )
+    lines.append(
+        _metric_line(
+            "CITATION VALIDITY",
+            citation_value,
+            citation_detail,
+            value_style=_rate_style(derived["citation_validity_rate"], citations),
+            color=color,
+        )
+    )
+
+    lines.extend(["", _paint("Activity", "bold", enabled=color)])
+    run_parts = [
+        f"{worker_total:,} total",
+        f"{succeeded:,} succeeded",
+        f"{failed:,} failed",
+        f"{escalations:,} {_plural(escalations, 'escalation')}",
+    ]
+    lines.append(_detail_line("Runs", " · ".join(run_parts), color=color))
+    if routing_total:
+        shadowed = routed - enforced
+        routing_detail = (
+            f"{routed:,} of {routing_total:,} eligible operations · "
+            f"{enforced:,} enforced · {shadowed:,} observed in shadow mode"
+        )
+    else:
+        routing_detail = "No eligible operations observed"
+    lines.append(_detail_line("Routing", routing_detail, color=color))
+    lines.append(
+        _detail_line(
+            "Usage",
+            f"{int(workers['input_tokens'] or 0):,} input · "
+            f"{int(workers['cached_input_tokens'] or 0):,} cached · "
+            f"{int(workers['output_tokens'] or 0):,} output",
+            color=color,
+        )
+    )
+    lines.append(
+        _detail_line(
+            "Worker cost",
+            f"{float(workers['worker_credits'] or 0):.4f} credits exact · "
+            f"{float(workers['sol_credits'] or 0):.4f} Sol-equivalent estimated",
+            color=color,
+        )
+    )
+    lines.append(
+        _detail_line(
+            "Latency",
+            f"{float(workers['average_duration_ms'] or 0) / 1000:.2f}s average",
+            color=color,
+        )
+    )
+
+    if payload["by_model"]:
+        lines.extend(["", _paint("Models", "bold", enabled=color)])
+        for row in payload["by_model"]:
+            lines.append(
+                f"- {row['worker_model']}: {row['runs']} runs, "
+                f"{int(row['tokens']):,} tokens · {float(row['credits']):.4f} credits"
+            )
+    lines.extend(
+        [
+            "",
+            _paint(
+                "Exact: worker usage and credits. Estimated: context avoided, "
+                "Sol-equivalent cost, and savings.",
+                "dim",
+                enabled=color,
+            ),
+        ]
+    )
+    return "\n".join(lines)
 
 
 def command_stats(args: argparse.Namespace) -> int:
@@ -214,50 +445,12 @@ def command_stats(args: argparse.Namespace) -> int:
     if args.json:
         print(json.dumps(payload, indent=2))
         return 0
-    routing = payload["routing"]
-    workers = payload["workers"]
-    derived = payload["derived"]
-    print(f"Codex Shunt — {args.since}")
-    print()
-    print(f"Observed eligible operations: {int(routing['total'] or 0):,}")
     print(
-        f"Routed or would route: {int(routing['routed'] or 0):,} "
-        f"({derived['routing_share']:.1%})"
-    )
-    print(
-        "Estimated source context intercepted: "
-        f"{_human_number(int(routing['estimated_tokens'] or 0))} tokens"
-    )
-    print(f"Worker runs: {int(workers['total'] or 0):,}")
-    print(f"Worker success rate: {derived['worker_success_rate']:.1%}")
-    print(
-        "Exact worker tokens: "
-        f"{int(workers['input_tokens'] or 0):,} input / "
-        f"{int(workers['cached_input_tokens'] or 0):,} cached / "
-        f"{int(workers['output_tokens'] or 0):,} output"
-    )
-    print(f"Exact worker credits: {float(workers['worker_credits'] or 0):.4f}")
-    print(
-        "Estimated Sol-equivalent worker credits: "
-        f"{float(workers['sol_credits'] or 0):.4f}"
-    )
-    print(
-        "Estimated worker-stage credit difference: "
-        f"{derived['worker_stage_credit_difference']:.4f}"
-    )
-    print(f"Citation validity: {derived['citation_validity_rate']:.1%}")
-    print(f"Worker escalations: {int(workers['escalations'] or 0):,}")
-    print(f"Average worker latency: {float(workers['average_duration_ms'] or 0) / 1000:.2f}s")
-    if payload["by_model"]:
-        print("\nWorker models:")
-        for row in payload["by_model"]:
-            print(
-                f"- {row['worker_model']}: {row['runs']} runs, "
-                f"{int(row['tokens']):,} tokens, {float(row['credits']):.4f} credits"
-            )
-    print(
-        "\nNote: worker usage is exact. Source tokens, Sol-equivalent credits, and "
-        "primary-context savings are estimates."
+        _render_stats(
+            payload,
+            args.since,
+            color=_color_enabled(getattr(args, "color", "auto")),
+        )
     )
     return 0
 
@@ -407,6 +600,12 @@ def build_parser() -> argparse.ArgumentParser:
     stats = commands.add_parser("stats", help="Show aggregate local telemetry")
     stats.add_argument("--since", default="7d")
     stats.add_argument("--json", action="store_true")
+    stats.add_argument(
+        "--color",
+        choices=("auto", "always", "never"),
+        default="auto",
+        help="Colorize output (default: auto; NO_COLOR disables auto color)",
+    )
     stats.set_defaults(handler=command_stats)
 
     export = commands.add_parser("export", help="Export local telemetry without source content")

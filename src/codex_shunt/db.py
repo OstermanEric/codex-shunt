@@ -219,7 +219,9 @@ def aggregate(since: str) -> dict[str, Any]:
         routing = connection.execute(
             f"""SELECT COUNT(*) AS total,
                 SUM(CASE WHEN decision IN ('would_route', 'deny', 'would_compress', 'compress') THEN 1 ELSE 0 END) AS routed,
-                COALESCE(SUM(estimated_source_tokens), 0) AS estimated_tokens
+                SUM(CASE WHEN decision IN ('deny', 'compress') THEN 1 ELSE 0 END) AS enforced,
+                COALESCE(SUM(CASE WHEN decision IN ('would_route', 'deny', 'would_compress', 'compress') THEN estimated_source_tokens ELSE 0 END), 0) AS estimated_tokens,
+                COALESCE(SUM(CASE WHEN decision IN ('deny', 'compress') THEN estimated_source_tokens ELSE 0 END), 0) AS estimated_intercepted_tokens
                 FROM routing_events{where}""",
             parameters,
         ).fetchone()

@@ -7,6 +7,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 import uuid
@@ -141,6 +142,23 @@ def parse_usage(jsonl: str) -> dict[str, int]:
     return usage
 
 
+def _with_outer_sandbox_hint(detail: str) -> str:
+    normalized = detail.lower()
+    markers = (
+        "failed to initialize in-process app-server client",
+        "attempt to write a readonly database",
+        "unable to open database file",
+    )
+    if not any(marker in normalized for marker in markers):
+        return detail
+    return (
+        f"{detail}\n\n"
+        "Codex Shunt appears to be running inside another Codex shell sandbox. "
+        "Re-run the Shunt launcher with narrowly scoped elevated/unsandboxed shell "
+        "approval. The Luna child still runs with --sandbox read-only."
+    )
+
+
 def credits_for(usage: dict[str, int], rates: dict[str, float]) -> float:
     cached = min(usage["cached_input_tokens"], usage["input_tokens"])
     uncached = max(usage["input_tokens"] - cached, 0)
@@ -249,7 +267,11 @@ def run_worker(
     try:
         ensure_chatgpt_auth(codex)
         with tempfile.TemporaryDirectory(prefix="codex-shunt-") as temporary:
-            workspace = Path(temporary)
+            temporary_root = Path(temporary)
+            workspace = temporary_root / "workspace"
+            state_home = temporary_root / "state"
+            workspace.mkdir()
+            state_home.mkdir()
             copy_to_workspace(selection, workspace)
             manifest = "\n".join(item.relative.as_posix() for item in selection.files) + "\n"
             (workspace / ".codex-shunt-files.txt").write_text(manifest, encoding="utf-8")
@@ -260,6 +282,7 @@ def run_worker(
                 "exec",
                 "--json",
                 "--ephemeral",
+                "--ignore-user-config",
                 "--skip-git-repo-check",
                 "--disable",
                 "hooks",
@@ -273,6 +296,8 @@ def run_worker(
                 str(result_path),
                 "-C",
                 str(workspace),
+                "-c",
+                f"sqlite_home={json.dumps(str(state_home))}",
                 "-c",
                 f'model_reasoning_effort="{config["reasoning_effort"]}"',
                 _worker_prompt(question, task_kind, len(selection.files)),
@@ -294,7 +319,10 @@ def run_worker(
             sol_credits = credits_for(usage, SOL_RATES)
             if completed.returncode != 0:
                 detail = completed.stderr.strip() or completed.stdout[-2000:].strip()
-                raise WorkerError(f"Codex worker exited {completed.returncode}: {detail}")
+                raise WorkerError(
+                    f"Codex worker exited {completed.returncode}: "
+                    f"{_with_outer_sandbox_hint(detail)}"
+                )
             if not result_path.exists():
                 raise WorkerError("Codex worker did not create its structured result")
             try:
@@ -316,33 +344,39 @@ def run_worker(
         raise
     finally:
         duration_ms = int((time.monotonic() - started) * 1000)
-        record_worker_run(
-            {
-                "id": run_id,
-                "session_id": session_id,
-                "turn_id": turn_id,
-                "parent_model": parent_model,
-                "worker_model": worker_model,
-                "task_kind": task_kind,
-                "question_hash": short_hash(question),
-                "repository_hash": short_hash(str(selection.root)),
-                "source_files": len(selection.files),
-                "excluded_files": selection.excluded_files,
-                "source_bytes": selection.source_bytes,
-                "source_lines": selection.source_lines,
-                "estimated_source_tokens": selection.estimated_tokens,
-                **usage,
-                "actual_worker_credits": actual_credits,
-                "sol_equivalent_credits": sol_credits,
-                "duration_ms": duration_ms,
-                "status": "success" if result is not None else "failed",
-                "error_type": error_type,
-                "needs_escalation": bool(result and result.get("needs_escalation")),
-                "citation_count": citation_count,
-                "valid_citation_count": valid_citations,
-                "result_chars": len(json.dumps(result)) if result is not None else 0,
-            }
-        )
+        worker_record = {
+            "id": run_id,
+            "session_id": session_id,
+            "turn_id": turn_id,
+            "parent_model": parent_model,
+            "worker_model": worker_model,
+            "task_kind": task_kind,
+            "question_hash": short_hash(question),
+            "repository_hash": short_hash(str(selection.root)),
+            "source_files": len(selection.files),
+            "excluded_files": selection.excluded_files,
+            "source_bytes": selection.source_bytes,
+            "source_lines": selection.source_lines,
+            "estimated_source_tokens": selection.estimated_tokens,
+            **usage,
+            "actual_worker_credits": actual_credits,
+            "sol_equivalent_credits": sol_credits,
+            "duration_ms": duration_ms,
+            "status": "success" if result is not None else "failed",
+            "error_type": error_type,
+            "needs_escalation": bool(result and result.get("needs_escalation")),
+            "citation_count": citation_count,
+            "valid_citation_count": valid_citations,
+            "result_chars": len(json.dumps(result)) if result is not None else 0,
+        }
+        try:
+            record_worker_run(worker_record)
+        except Exception as telemetry_error:
+            print(
+                "Codex Shunt warning: worker telemetry was not recorded: "
+                f"{telemetry_error}",
+                file=sys.stderr,
+            )
 
     assert result is not None
     return WorkerOutcome(

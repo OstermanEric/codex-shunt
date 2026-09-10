@@ -441,6 +441,29 @@ shunt stats --since all --json
 
 `--since` accepts `all`, `<N>h`, `<N>d`, or an ISO timestamp.
 
+The terminal view leads with estimated credits saved, estimated primary-model
+context avoided by enforced routing, worker success, and citation validity.
+Supporting activity and per-model usage follow underneath. Color is enabled
+automatically for an interactive terminal and omitted when output is
+redirected. Use `--color always` or `--color never` to override detection; the
+standard `NO_COLOR` environment variable also disables automatic color.
+
+```text
+Codex Shunt  ·  all time
+
+CREDITS SAVED      7.9042 credits     estimated · 94.8% less than Sol-equivalent
+CONTEXT AVOIDED    0 tokens           no intercepted context
+SUCCESS RATE       66.7%              2 of 3 worker runs
+CITATION VALIDITY  100.0%             4 of 4 citations valid
+
+Activity
+Runs         3 total · 2 succeeded · 1 failed · 1 escalation
+Routing      No eligible operations observed
+Usage        154,823 input · 94,976 cached · 2,801 output
+Worker cost  0.4308 credits exact · 8.3350 Sol-equivalent estimated
+Latency      22.17s average
+```
+
 ### Generate an HTML report
 
 ```bash
@@ -529,6 +552,9 @@ The following values are estimates:
 - worker-stage credit difference
 - total subscription capacity saved
 
+Shadow-mode candidates are reported as identified context, not avoided context;
+only enforced routing and compression contribute to the avoided-context total.
+
 Current Codex hooks expose the primary model name but not stable primary-turn
 token totals. Therefore this version cannot honestly report an exact percentage
 of all high-tier versus low-tier tokens. It reports exact worker usage and
@@ -582,6 +608,20 @@ The source collector:
 
 The hook is a routing aid, not a complete security boundary. The primary model
 must verify material citations and own final judgment.
+
+When a Codex task invokes Shunt, the outer `shunt inspect` or `shunt
+summarize-log` command needs narrowly scoped elevated/unsandboxed shell
+approval. A nested `codex exec` cannot initialize Codex's local runtime services
+from inside another Codex shell sandbox. This outer approval does not make the
+worker writable: Shunt still copies filtered inputs to a disposable workspace
+and launches Luna with `--sandbox read-only`, hooks disabled, and user config
+ignored. The worker's SQLite runtime state is also kept inside that disposable
+workspace.
+
+If a worker reports `attempt to write a readonly database`, `unable to open
+database file`, or `failed to initialize in-process app-server client`, rerun
+the Shunt launcher once with that scoped outer approval. Do not grant the child
+`--dangerously-bypass-approvals-and-sandbox`.
 
 ## Test the plugin
 

@@ -37,6 +37,24 @@ Never pass `.env` files, private keys, credentials, tokens, keychains, or other
 secrets. The runner also filters common secret-bearing paths and copies approved
 text files into an isolated temporary workspace before starting Luna.
 
+## Run from a sandboxed Codex task
+
+When invoking the runner through a local Codex task's shell, request narrowly
+scoped elevated/unsandboxed execution for the Shunt command on the first call.
+Use a reusable prefix limited to the resolved runner plus its `inspect` or
+`summarize-log` subcommand when the host supports persistent approvals. The
+outer permission is required because a nested `codex exec` must access Codex's
+local authentication/runtime services and Shunt's metrics database.
+
+This does not relax the Luna worker: Shunt copies filtered sources into a
+temporary workspace and launches the child with `--sandbox read-only`. Never
+replace that child policy with `--dangerously-bypass-approvals-and-sandbox`.
+
+If an in-sandbox attempt reports a read-only state database, an unavailable
+metrics database, or failure to initialize the in-process app-server client,
+retry Shunt once with the scoped outer approval. Do not repeat the same
+in-sandbox invocation.
+
 ## Metrics
 
 Use the runner for metrics and reports:
