@@ -199,6 +199,8 @@ def command_doctor(args: argparse.Namespace) -> int:
     required = [
         PLUGIN_ROOT / ".codex-plugin" / "plugin.json",
         PLUGIN_ROOT / "hooks" / "hooks.json",
+        PLUGIN_ROOT / "scripts" / "codex-shunt",
+        PLUGIN_ROOT / "scripts" / "codex-shunt-hook",
         PLUGIN_ROOT / "schemas" / "worker-result.schema.json",
     ]
     missing = [str(path) for path in required if not path.is_file()]
@@ -225,7 +227,10 @@ def command_doctor(args: argparse.Namespace) -> int:
             {
                 "name": "configuration",
                 "ok": True,
-                "detail": f"mode={config['mode']}, worker={config['worker_model']}",
+                "detail": (
+                    f"strict_routing={str(config['strict_routing']).lower()}, "
+                    f"worker={config['worker_model']}"
+                ),
             }
         )
     except Exception as exc:
@@ -389,7 +394,7 @@ def _render_stats(payload: dict[str, Any], since: str, *, color: bool) -> str:
         shadowed = routed - enforced
         routing_detail = (
             f"{routed:,} of {routing_total:,} eligible operations · "
-            f"{enforced:,} enforced · {shadowed:,} observed in shadow mode"
+            f"{enforced:,} enforced · {shadowed:,} observed with strict routing off"
         )
     else:
         routing_detail = "No eligible operations observed"
@@ -588,6 +593,10 @@ def build_parser() -> argparse.ArgumentParser:
     doctor.add_argument("--json", action="store_true")
     doctor.set_defaults(handler=command_doctor)
 
+    status = commands.add_parser("status", help="Alias for doctor")
+    status.add_argument("--json", action="store_true")
+    status.set_defaults(handler=command_doctor)
+
     config = commands.add_parser("config", help="View or change Codex Shunt configuration")
     config_actions = config.add_subparsers(dest="config_action", required=True)
     config_show = config_actions.add_parser("show")
@@ -632,6 +641,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
+    if len(sys.argv) > 2 and sys.argv[1] == "hook" and sys.argv[2] == "pre":
+        raise SystemExit(hook_pre())
+    if len(sys.argv) > 2 and sys.argv[1] == "hook" and sys.argv[2] == "post":
+        raise SystemExit(hook_post())
+    # Backward-compatible internal names for already-loaded hook definitions.
     if len(sys.argv) > 1 and sys.argv[1] == "hook-pre":
         raise SystemExit(hook_pre())
     if len(sys.argv) > 1 and sys.argv[1] == "hook-post":

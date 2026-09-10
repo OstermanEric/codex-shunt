@@ -1,0 +1,13 @@
+#!/bin/sh
+# Dependency-light, fail-open bridge from Codex's hook runtime to the bundled
+# plugin command. A missing/corrupt install must never block ordinary tools.
+
+plugin_root=${PLUGIN_ROOT:-$(CDPATH= cd -P "$(dirname "$0")/.." 2>/dev/null && pwd)}
+runner="$plugin_root/scripts/codex-shunt"
+
+if [ ! -x "$runner" ]; then
+  exit 0
+fi
+
+"$runner" hook "$@" || exit 0
+exit 0

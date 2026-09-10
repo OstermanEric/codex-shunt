@@ -1,6 +1,6 @@
 {
   "name": "codex-shunt",
-  "version": "0.1.0+codex.20260910155000",
+  "version": "0.1.0+codex.20260910192311",
   "description": "Route high-volume, predictable Codex work to a subscription-authenticated Luna worker and measure the result.",
   "author": {
     "name": "Local developer"

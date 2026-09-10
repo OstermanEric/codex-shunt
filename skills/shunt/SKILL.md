@@ -11,9 +11,16 @@ for large, predictable evidence collection.
 
 ## Locate the runner
 
-Prefer `$PLUGIN_ROOT/scripts/codex-shunt` when `PLUGIN_ROOT` is available.
-Otherwise use `$HOME/plugins/codex-shunt/scripts/codex-shunt`. If neither exists,
-tell the user that the local plugin source cannot be located.
+Use the executable bundled in the same plugin as this skill. Resolve the plugin
+root two directories above this `SKILL.md`, then use
+`<plugin-root>/scripts/codex-shunt`. This works from Codex's versioned installed
+snapshot and never requires a generated cache path, symlink, or source checkout.
+
+When `PLUGIN_ROOT` is already available, use
+`$PLUGIN_ROOT/scripts/codex-shunt`. The optional `shunt` command on `PATH` and
+`$HOME/plugins/codex-shunt/scripts/codex-shunt` source checkout are fallbacks for
+ordinary Terminal and local development. If no bundled runner exists, continue
+in the primary model and tell the user the plugin installation is incomplete.
 
 ## Route a read
 
@@ -21,7 +28,7 @@ tell the user that the local plugin source cannot be located.
 2. Run:
 
    ```bash
-   "$HOME/plugins/codex-shunt/scripts/codex-shunt" inspect \
+   "<resolved-plugin-root>/scripts/codex-shunt" inspect \
      --root "$(git rev-parse --show-toplevel)" \
      --question "<precise evidence question>" \
      <path> [<path> ...]
@@ -36,6 +43,24 @@ tell the user that the local plugin source cannot be located.
 Never pass `.env` files, private keys, credentials, tokens, keychains, or other
 secrets. The runner also filters common secret-bearing paths and copies approved
 text files into an isolated temporary workspace before starting Luna.
+
+## Strict routing
+
+Strict routing is off by default. When it is on, the bundled `PreToolUse` hook
+runs the same filtered, read-only Luna worker itself and returns its compact
+result before denying the original broad read. It must fail open: if the runner,
+configuration, telemetry, authentication, or worker fails, allow the original
+tool call.
+
+When the user asks to enable or disable strict routing, run:
+
+```bash
+"<resolved-plugin-root>/scripts/codex-shunt" config set strict_routing true
+"<resolved-plugin-root>/scripts/codex-shunt" config set strict_routing false
+```
+
+Do not ask the user to clear plugin caches. A legacy `mode = "enforce"` setting
+is migrated automatically.
 
 ## Run from a sandboxed Codex task
 
@@ -60,9 +85,9 @@ in-sandbox invocation.
 Use the runner for metrics and reports:
 
 ```bash
-"$HOME/plugins/codex-shunt/scripts/codex-shunt" stats --since 7d
-"$HOME/plugins/codex-shunt/scripts/codex-shunt" report --since 30d
-"$HOME/plugins/codex-shunt/scripts/codex-shunt" export --since all --format json
+"<resolved-plugin-root>/scripts/codex-shunt" stats --since 7d
+"<resolved-plugin-root>/scripts/codex-shunt" report --since 30d
+"<resolved-plugin-root>/scripts/codex-shunt" export --since all --format json
 ```
 
 Worker token counts are exact. Primary-context tokens avoided and

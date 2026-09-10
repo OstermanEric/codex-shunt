@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shlex
 import sys
 from pathlib import Path
@@ -11,8 +12,8 @@ from typing import Any
 
 from .config import load_config
 from .db import record_routing_event
-from .sources import count_lines, is_probably_text, is_sensitive
-from .worker import WorkerError, run_worker_for_content
+from .sources import collect_sources, count_lines, is_probably_text, is_sensitive
+from .worker import WorkerError, run_worker, run_worker_for_content
 
 
 READ_COMMANDS = {"awk", "bat", "cat", "head", "less", "more", "sed", "tail"}
@@ -95,6 +96,50 @@ def _mcp_paths(tool_input: Any, cwd: Path) -> list[Path]:
     return paths
 
 
+def _bounded_read_lines(command: str, path_count: int) -> int | None:
+    """Estimate an explicit head/tail/sed line range; None means unbounded."""
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        return None
+
+    for index, token in enumerate(tokens):
+        executable = Path(token).name
+        if executable in {"head", "tail"}:
+            arguments = tokens[index + 1 :]
+            if any(argument == "-c" or argument.startswith("--bytes") for argument in arguments):
+                return None
+            lines = 10
+            for position, argument in enumerate(arguments):
+                if argument in {"-n", "--lines"} and position + 1 < len(arguments):
+                    try:
+                        lines = abs(int(arguments[position + 1]))
+                    except ValueError:
+                        return None
+                elif argument.startswith("--lines="):
+                    try:
+                        lines = abs(int(argument.split("=", 1)[1]))
+                    except ValueError:
+                        return None
+                elif re.fullmatch(r"-\d+", argument):
+                    lines = int(argument[1:])
+            return lines * max(path_count, 1)
+
+        if executable == "sed":
+            arguments = tokens[index + 1 :]
+            if "-n" not in arguments and "--quiet" not in arguments and "--silent" not in arguments:
+                return None
+            for argument in arguments:
+                match = re.fullmatch(r"(\d+)(?:,(\d+))?p", argument)
+                if not match:
+                    continue
+                start = int(match.group(1))
+                end = int(match.group(2) or match.group(1))
+                return max(end - start + 1, 0) * max(path_count, 1)
+            return None
+    return None
+
+
 def _source_metrics(paths: list[Path]) -> dict[str, int]:
     source_files = 0
     source_bytes = 0
@@ -140,9 +185,6 @@ def hook_pre() -> int:
     except Exception as exc:
         _debug(f"pre-hook initialization failed: {exc}")
         return 0
-    if config["mode"] == "off":
-        return 0
-
     tool_name = str(event.get("tool_name", ""))
     tool_input = event.get("tool_input")
     cwd = Path(str(event.get("cwd") or os.getcwd())).resolve()
@@ -154,6 +196,9 @@ def hook_pre() -> int:
 
     paths = _command_paths(command, cwd) if tool_name == "Bash" else _mcp_paths(tool_input, cwd)
     metrics = _source_metrics(paths)
+    bounded_lines = _bounded_read_lines(command, len(paths)) if tool_name == "Bash" else None
+    if bounded_lines is not None and bounded_lines < int(config["min_file_lines"]):
+        return 0
     is_large = (
         metrics["source_lines"] >= int(config["min_file_lines"])
         or metrics["source_bytes"] >= int(config["min_source_bytes"])
@@ -162,9 +207,8 @@ def hook_pre() -> int:
         return 0
 
     reason = "large-predictable-read"
-    decision = "would_route" if config["mode"] == "shadow" else "deny"
-    _record_route(event, decision, reason, metrics)
-    if config["mode"] != "enforce":
+    if not config["strict_routing"]:
+        _record_route(event, "would_route", reason, metrics)
         return 0
 
     relative_paths: list[str] = []
@@ -172,16 +216,52 @@ def hook_pre() -> int:
         try:
             relative_paths.append(path.relative_to(cwd).as_posix())
         except ValueError:
-            relative_paths.append(str(path))
-    rendered_paths = " ".join(shlex.quote(path) for path in relative_paths)
-    redirect = (
-        "Codex Shunt blocked a large direct read before it entered the primary model's context. "
-        "Use the bundled `shunt` skill and run: "
-        f"$HOME/plugins/codex-shunt/scripts/codex-shunt inspect --root {shlex.quote(str(cwd))} "
-        f"--question {shlex.quote('Extract only the evidence needed for the current task')} "
-        f"{rendered_paths}. Then verify only its cited ranges. "
-        "If routing is inappropriate or the worker fails, retry the original command once with "
-        "CODEX_SHUNT_BYPASS=1."
+            # Strict routing never copies files from outside the active workspace.
+            _record_route(event, "route_failed", "path-outside-workspace", metrics)
+            return 0
+
+    operation = f"The parent attempted a {tool_name or 'file-read'} operation."
+    question = (
+        "Summarize the selected files for a primary coding agent before they enter its context. "
+        "Identify their purpose, important symbols or behavior, and any evidence likely to matter "
+        "to the attempted read. Do not make architecture or implementation decisions. "
+        f"{operation}"
+    )
+
+    try:
+        selection = collect_sources(
+            cwd,
+            relative_paths,
+            max_files=int(config["max_source_files"]),
+            max_bytes=int(config["max_source_bytes"]),
+        )
+        outcome = run_worker(
+            question=question,
+            selection=selection,
+            config=config,
+            task_kind="hook-routed-read",
+            session_id=event.get("session_id"),
+            turn_id=event.get("turn_id"),
+            parent_model=event.get("model"),
+        )
+    except Exception as exc:
+        # Strict routing is intentionally fail-open. If the bundled worker or
+        # telemetry is unavailable, Codex receives the original tool result.
+        _record_route(event, "route_failed", type(exc).__name__, metrics)
+        _debug(f"strict routing failed open: {exc}")
+        return 0
+
+    _record_route(event, "deny", reason, metrics)
+    routed_result = _format_worker_context(
+        outcome,
+        introduction=(
+            "Codex Shunt routed this large read through its bundled, "
+            "subscription-authenticated Luna worker. The original read was not executed."
+        ),
+        retry_note=(
+            "Use targeted reads to verify cited ranges. If the worker summary is unsuitable, "
+            "retry the original operation once with CODEX_SHUNT_BYPASS=1."
+        ),
     )
     print(
         json.dumps(
@@ -189,7 +269,7 @@ def hook_pre() -> int:
                 "hookSpecificOutput": {
                     "hookEventName": "PreToolUse",
                     "permissionDecision": "deny",
-                    "permissionDecisionReason": redirect,
+                    "permissionDecisionReason": routed_result,
                 }
             }
         )
@@ -203,10 +283,21 @@ def _response_text(response: Any) -> str:
     return json.dumps(response, ensure_ascii=False, indent=2)
 
 
-def _format_worker_context(outcome: Any) -> str:
+def _format_worker_context(
+    outcome: Any,
+    *,
+    introduction: str = (
+        "Codex Shunt compressed oversized command output with a "
+        "subscription-authenticated Luna worker."
+    ),
+    retry_note: str = (
+        "The original output was not retained by Codex Shunt. Rerun the command with "
+        "CODEX_SHUNT_BYPASS=1 if exact raw lines are needed."
+    ),
+) -> str:
     result = outcome.result
     lines = [
-        "Codex Shunt compressed oversized command output with a subscription-authenticated Luna worker.",
+        introduction,
         f"Run ID: {outcome.run_id}",
         "",
         result.get("summary", "No summary returned."),
@@ -223,13 +314,7 @@ def _format_worker_context(outcome: Any) -> str:
     if limitations:
         lines.extend(["", "Limitations:"])
         lines.extend(f"- {item}" for item in limitations)
-    lines.extend(
-        [
-            "",
-            "The original output was not retained by Codex Shunt. Rerun the command with ",
-            "CODEX_SHUNT_BYPASS=1 if exact raw lines are needed.",
-        ]
-    )
+    lines.extend(["", retry_note])
     return "\n".join(lines)
 
 
@@ -242,9 +327,6 @@ def hook_post() -> int:
     except Exception as exc:
         _debug(f"post-hook initialization failed: {exc}")
         return 0
-    if config["mode"] == "off":
-        return 0
-
     tool_input = event.get("tool_input")
     command = tool_input.get("command", "") if isinstance(tool_input, dict) else ""
     if not isinstance(command, str) or "CODEX_SHUNT_BYPASS=1" in command or "codex-shunt" in command:
@@ -264,9 +346,9 @@ def hook_post() -> int:
         "estimated_source_tokens": (content_bytes + 3) // 4,
     }
     decision = (
-        "would_compress"
-        if config["mode"] == "shadow" or not config["post_tool_compression"]
-        else "compress"
+        "compress"
+        if config["strict_routing"] and config["post_tool_compression"]
+        else "would_compress"
     )
     _record_route(event, decision, "oversized-command-output", metrics)
     if decision != "compress":

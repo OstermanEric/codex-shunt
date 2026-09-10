@@ -101,7 +101,7 @@ class StatsRenderingTests(unittest.TestCase):
         rendered = _render_stats(payload, "all", color=False)
         self.assertIn("CONTEXT AVOIDED    0 tokens", rendered)
         self.assertIn("15.40K more identified", rendered)
-        self.assertIn("0 enforced · 2 observed in shadow mode", rendered)
+        self.assertIn("0 enforced · 2 observed with strict routing off", rendered)
 
     def test_color_mode_and_parser_override(self) -> None:
         rendered = _render_stats(self.payload, "all", color=True)

@@ -1,4 +1,4 @@
-mode = "shadow"
+strict_routing = false
 worker_model = "gpt-5.6-luna"
 reasoning_effort = "low"
 min_file_lines = 500

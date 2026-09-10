@@ -1,5 +1,5 @@
 {
-  "description": "Observe large reads and optionally compress oversized command output with Codex Shunt.",
+  "description": "Route large reads through Codex Shunt and optionally compress oversized command output.",
   "hooks": {
     "PreToolUse": [
       {
@@ -7,9 +7,9 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$PLUGIN_ROOT/scripts/codex-shunt\" hook-pre",
-            "timeout": 5,
-            "statusMessage": "Checking whether Codex Shunt should route this read"
+            "command": "\"$PLUGIN_ROOT/scripts/codex-shunt-hook\" pre",
+            "timeout": 180,
+            "statusMessage": "Routing large reads through Codex Shunt when strict mode is enabled"
           }
         ]
       }
@@ -20,7 +20,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$PLUGIN_ROOT/scripts/codex-shunt\" hook-post",
+            "command": "\"$PLUGIN_ROOT/scripts/codex-shunt-hook\" post",
             "timeout": 180,
             "statusMessage": "Checking oversized command output"
           }

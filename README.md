@@ -13,34 +13,33 @@ worker unless `codex login status` reports ChatGPT authentication.
 
 ## Quick start
 
-After installing the plugin and trusting its hooks, install the `shunt` command
-into your user-local command directory:
+Install the plugin, review and trust its hooks once, and start a new Codex task.
+That is enough for Codex to use the bundled worker: no API key, package manager,
+shell profile edit, symlink, cache clearing, or generated absolute path is
+required.
+
+Codex Shunt starts with strict routing off. The skill can still delegate a
+large, predictable read explicitly. Turn on automatic interception by asking
+Codex to enable strict routing, or—if you installed the optional terminal
+command—run:
+
+```bash
+shunt config set strict_routing true
+```
+
+For direct use from an ordinary Terminal, the source checkout includes an
+optional command installer:
 
 ```bash
 "$HOME/plugins/codex-shunt/scripts/install-command"
 ```
 
-The installer creates `~/.local/bin/shunt` without changing shell startup
-files. If `~/.local/bin` is not already on `PATH`, add it to your shell profile
-and open a new shell:
+It creates `~/.local/bin/shunt` without modifying shell startup files. Verify
+the runtime with either `shunt status` or `shunt doctor`:
 
 ```bash
-printf '%s\n' 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.zprofile"
-export PATH="$HOME/.local/bin:$PATH"
-```
-
-Then verify the setup and begin in observation-only mode:
-
-```bash
-shunt doctor
-shunt config set mode shadow
+shunt status
 shunt stats --since 1h
-```
-
-After the verification steps in this README pass, enable automatic routing:
-
-```bash
-shunt config set mode enforce
 ```
 
 ## Current scope
@@ -48,7 +47,8 @@ shunt config set mode enforce
 Version 0.1.0 implements:
 
 - a packaged Codex skill and `PreToolUse` / `PostToolUse` hooks;
-- safe `off`, `shadow`, and `enforce` routing modes;
+- a simple `strict_routing` switch that is off by default;
+- direct strict-hook routing through the bundled worker, with fail-open fallback;
 - an isolated read-only GPT-5.6 Luna worker;
 - explicit repository inspection and log summarization commands;
 - SQLite telemetry with stats, JSON, CSV, and HTML reporting;
@@ -68,21 +68,21 @@ flowchart TD
     B -- No --> C[Primary model chooses a tool]
     C --> D{Large direct text read?}
     D -- No --> N[Run tool normally]
-    D -- 500+ lines or 100 KB+ --> M{Routing mode}
-    M -- off --> N
-    M -- shadow --> R[Record would_route metric]
+    D -- 500+ lines or 100 KB+ --> M{Strict routing?}
+    M -- off --> R[Record would_route metric]
     R --> N
-    M -- enforce --> X[Block broad read]
-    X --> W
+    M -- on --> W
     W --> F[Filter sensitive and generated files]
     F --> L[Run ephemeral read-only Luna worker]
+    L -- worker failure --> N
     L --> J[Validate JSON and file-line citations]
     J --> T[Store content-free usage and quality metrics]
-    T --> V[Primary model verifies material cited ranges]
+    T --> X[Deny original bulk read and return compact result]
+    X --> V[Primary model verifies material cited ranges]
     V --> Z[Primary model decides and answers]
     N --> O{Recognized test, build, or lint output over 100 KB?}
     O -- No --> Z
-    O -- Yes --> P{Enforce plus compression enabled?}
+    O -- Yes --> P{Strict plus compression enabled?}
     P -- No --> Q[Record would_compress metric]
     Q --> Z
     P -- Yes --> S[Luna summarizes oversized output]
@@ -90,9 +90,10 @@ flowchart TD
 ```
 
 1. The primary Codex model receives the user request.
-2. The plugin's `PreToolUse` hook inspects large direct reads. In `shadow` mode
-   it records what it would route. In `enforce` mode it blocks a qualifying read
-   and tells the primary model to invoke the bundled Shunt skill.
+2. The plugin's `PreToolUse` hook inspects large direct reads. With strict
+   routing off it records what it would route and allows the original tool.
+   With strict routing on it invokes the bundled worker itself, returns the
+   compact result, and blocks the original broad read only after worker success.
 3. The Shunt runner resolves approved text files, excludes common sensitive and
    generated paths, and copies the selected files into an isolated temporary
    workspace.
@@ -109,7 +110,7 @@ The worker process disables hooks and sets `CODEX_SHUNT_WORKER=1`, preventing
 recursive routing.
 
 `PostToolUse` can also detect oversized test, build, lint, and compiler output.
-Compression is disabled by default. When explicitly enabled in `enforce` mode,
+Compression is disabled by default. When explicitly enabled with strict routing,
 the hook sends the output to Luna and replaces the original model-visible result
 with a concise, cited failure summary.
 
@@ -295,17 +296,19 @@ You can also run `shunt inspect` directly.
 The `PreToolUse` hook examines text-file reads initiated by Codex through
 supported shell and MCP tools. A read qualifies when the selected files total
 at least `min_file_lines` (500 by default) or `min_source_bytes` (100000 bytes
-by default).
+by default). Explicitly bounded `head`, `tail`, and `sed -n` line ranges below
+the line threshold remain direct so the primary model can verify focused cited
+ranges without triggering another worker.
 
 The `PostToolUse` hook watches recognized test, build, lint, type-check, and
 compiler commands. Output qualifies at `post_tool_min_bytes` (100000 bytes by
-default). Compression occurs only when `mode` is `enforce` and
-`post_tool_compression` is `true`.
+default). Compression occurs only when `strict_routing` and
+`post_tool_compression` are both `true`.
 
 Hooks observe tools called by Codex in the desktop app or CLI. Commands you run
 manually in an ordinary Terminal do not trigger the hooks.
 
-## Modes
+## Strict routing
 
 Show the active configuration:
 
@@ -313,47 +316,47 @@ Show the active configuration:
 shunt config show
 ```
 
-The default mode is `shadow`:
+Strict routing is off by default:
 
 ```bash
-shunt config set mode shadow
+shunt config set strict_routing false
 ```
 
-In shadow mode, hooks never block or replace output. They only record qualifying
-operations.
+The pre-hook records qualifying operations but never blocks or replaces their
+output. Explicit skill or command invocations still use Luna.
 
-Enable routing enforcement:
+Enable direct automatic routing:
 
 ```bash
-shunt config set mode enforce
+shunt config set strict_routing true
 ```
 
-Disable all routing hooks while leaving the plugin installed:
-
-```bash
-shunt config set mode off
-```
-
-To bypass an enforced routing decision once, prefix the original command:
+When a qualifying read succeeds through Luna, the hook returns that compact
+result and denies the original broad read. If the worker cannot start, times
+out, returns invalid output, or telemetry/config initialization fails, the hook
+fails open and the original tool proceeds. To bypass strict routing once,
+prefix the original command:
 
 ```bash
 CODEX_SHUNT_BYPASS=1 sed -n '1,1200p' path/to/large-file.ts
 ```
 
-| Mode | Behavior | When to use it |
+| Setting | Behavior | When to use it |
 | --- | --- | --- |
-| `off` | Hooks do nothing | Emergency disable or hook troubleshooting |
-| `shadow` | Records `would_route` or `would_compress`; original result continues | Initial rollout and threshold tuning |
-| `enforce` | Blocks qualifying large reads and can replace oversized output with a Luna summary | Normal automatic operation after verification |
+| `strict_routing = false` | Records `would_route` or `would_compress`; original result continues | Default, threshold tuning, or troubleshooting |
+| `strict_routing = true` | Directly runs Luna for qualifying reads and can replace oversized output | Predictable automatic context savings |
 
 ## Configuration reference
 
-Use `shunt config set KEY VALUE`. Settings are written to
-`$HOME/.local/share/codex-shunt/config.toml`.
+Use `shunt config set KEY VALUE`. Operator settings are written to
+`$HOME/.local/share/codex-shunt/config.toml`, so the same switch applies from a
+normal terminal and from installed hooks. Hook telemetry uses Codex's writable
+`PLUGIN_DATA` directory; explicit terminal runs use
+`$HOME/.local/share/codex-shunt` unless `CODEX_SHUNT_DATA_DIR` is set.
 
 | Key | Default | When and why to change it | Example |
 | --- | --- | --- | --- |
-| `mode` | `shadow` | Use `enforce` after verification; `off` disables hooks | `shunt config set mode enforce` |
+| `strict_routing` | `false` | Set true to route qualifying reads directly through Luna | `shunt config set strict_routing true` |
 | `worker_model` | `gpt-5.6-luna` | Keep Luna for low-credit bulk work; change only for controlled comparisons | `shunt config set worker_model gpt-5.6-terra` |
 | `reasoning_effort` | `low` | Raise for harder classification, accepting more latency and usage | `shunt config set reasoning_effort medium` |
 | `min_file_lines` | `500` | Raise to route fewer reads; lower to route more | `shunt config set min_file_lines 800` |
@@ -361,7 +364,7 @@ Use `shunt config set KEY VALUE`. Settings are written to
 | `max_source_files` | `500` | Cap how many approved files one worker receives | `shunt config set max_source_files 250` |
 | `max_source_bytes` | `10000000` | Cap copied source and oversized-output input | `shunt config set max_source_bytes 5000000` |
 | `max_output_chars` | `12000` | Bound the structured worker result returned to the parent | `shunt config set max_output_chars 8000` |
-| `post_tool_compression` | `false` | Enable only with `enforce` after testing log summaries | `shunt config set post_tool_compression true` |
+| `post_tool_compression` | `false` | Enable only with strict routing after testing log summaries | `shunt config set post_tool_compression true` |
 | `post_tool_min_bytes` | `100000` | Raise when ordinary test output is compressed too often | `shunt config set post_tool_min_bytes 200000` |
 | `worker_timeout_seconds` | `150` | Raise for unusually large inspections; lower for faster failure | `shunt config set worker_timeout_seconds 240` |
 | `retain_raw_worker_events` | `false` | Reserved; current versions do not retain raw events | `shunt config set retain_raw_worker_events false` |
@@ -369,7 +372,7 @@ Use `shunt config set KEY VALUE`. Settings are written to
 Restore the recommended conservative configuration:
 
 ```bash
-shunt config set mode shadow
+shunt config set strict_routing false
 shunt config set worker_model gpt-5.6-luna
 shunt config set reasoning_effort low
 shunt config set min_file_lines 500
@@ -381,7 +384,7 @@ shunt config set post_tool_compression false
 
 | Command | When to use it | What it does |
 | --- | --- | --- |
-| `shunt doctor [--json]` | Installation and troubleshooting | Checks Python, Codex discovery, ChatGPT auth, plugin files, storage, and config |
+| `shunt status [--json]` / `shunt doctor [--json]` | Installation and troubleshooting | Checks Python, Codex discovery, ChatGPT auth, plugin files, storage, and config |
 | `shunt config show` | Before testing or tuning | Prints the effective configuration |
 | `shunt config set KEY VALUE` | Changing routing behavior | Writes one validated user setting |
 | `shunt inspect ...` | Predictable repository-wide evidence collection | Sends approved files to a read-only Luna worker |
@@ -552,8 +555,9 @@ The following values are estimates:
 - worker-stage credit difference
 - total subscription capacity saved
 
-Shadow-mode candidates are reported as identified context, not avoided context;
-only enforced routing and compression contribute to the avoided-context total.
+Candidates observed while strict routing is off are reported as identified
+context, not avoided context; only successful strict routing and compression
+contribute to the avoided-context total.
 
 Current Codex hooks expose the primary model name but not stable primary-turn
 token totals. Therefore this version cannot honestly report an exact percentage
@@ -572,10 +576,10 @@ published subscription rate card changes.
 
 ## Post-tool output compression
 
-Output compression requires both `enforce` mode and the feature flag:
+Output compression requires both strict routing and the feature flag:
 
 ```bash
-shunt config set mode enforce
+shunt config set strict_routing true
 shunt config set post_tool_compression true
 ```
 
@@ -609,14 +613,15 @@ The source collector:
 The hook is a routing aid, not a complete security boundary. The primary model
 must verify material citations and own final judgment.
 
-When a Codex task invokes Shunt, the outer `shunt inspect` or `shunt
-summarize-log` command needs narrowly scoped elevated/unsandboxed shell
-approval. A nested `codex exec` cannot initialize Codex's local runtime services
-from inside another Codex shell sandbox. This outer approval does not make the
-worker writable: Shunt still copies filtered inputs to a disposable workspace
-and launches Luna with `--sandbox read-only`, hooks disabled, and user config
-ignored. The worker's SQLite runtime state is also kept inside that disposable
-workspace.
+When a Codex task explicitly invokes `shunt inspect` or `shunt summarize-log`
+through a sandboxed shell, that outer command needs narrowly scoped
+elevated/unsandboxed approval. A nested `codex exec` cannot initialize Codex's
+local runtime services from inside another Codex shell sandbox. Strict automatic
+routing launches the same worker from the trusted plugin hook runtime, avoiding
+the second manual command. Neither path makes the worker writable: Shunt copies
+filtered inputs to a disposable workspace and launches Luna with `--sandbox
+read-only`, hooks disabled, and user config ignored. The worker's SQLite runtime
+state is also kept inside that disposable workspace.
 
 If a worker reports `attempt to write a readonly database`, `unable to open
 database file`, or `failed to initialize in-process app-server client`, rerun
@@ -668,15 +673,17 @@ Use a shell command to read all 600 lines of
 /tmp/codex-shunt-trigger.txt.
 ```
 
-In `shadow` mode, the read continues and `routing.total` should increase:
+With `strict_routing = false`, the read continues and `routing.total` should
+increase:
 
 ```bash
 shunt stats --since 1h
 ```
 
-In `enforce` mode, the broad read should be denied and Codex should invoke the
-Shunt worker instead. If nothing is recorded, check `shunt config show`, start
-a new task, and review `/hooks` trust in the Codex CLI.
+With `strict_routing = true`, the hook should invoke Luna directly, return its
+compact result, and deny the original broad read. If Luna fails, the original
+read proceeds. If nothing is recorded, check `shunt config show`, start a new
+task, and review `/hooks` trust in the Codex CLI.
 
 ## Development validation
 
