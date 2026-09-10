@@ -1,0 +1,6 @@
+__pycache__/
+*.py[cod]
+.DS_Store
+codex-shunt-report.html
+codex-shunt-metrics.json
+codex-shunt-metrics.csv

@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "summary": {
+      "type": "string"
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "file": {"type": "string"},
+          "line_start": {"type": "integer", "minimum": 1},
+          "line_end": {"type": "integer", "minimum": 1},
+          "claim": {"type": "string"},
+          "confidence": {"type": "number", "minimum": 0, "maximum": 1}
+        },
+        "required": ["file", "line_start", "line_end", "claim", "confidence"],
+        "additionalProperties": false
+      }
+    },
+    "recommended_reads": {
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "needs_escalation": {
+      "type": "boolean"
+    },
+    "limitations": {
+      "type": "array",
+      "items": {"type": "string"}
+    }
+  },
+  "required": ["summary", "findings", "recommended_reads", "needs_escalation", "limitations"],
+  "additionalProperties": false
+}

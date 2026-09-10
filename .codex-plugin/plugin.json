@@ -1,0 +1,26 @@
+{
+  "name": "codex-shunt",
+  "version": "0.1.0+codex.20260909175120",
+  "description": "Route high-volume, predictable Codex work to a subscription-authenticated Luna worker and measure the result.",
+  "author": {
+    "name": "Local developer"
+  },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Codex Shunt",
+    "shortDescription": "Route bulk work to Luna and measure usage.",
+    "longDescription": "Codex Shunt keeps judgment-heavy work in the primary model while routing large reads and predictable analysis to a subscription-authenticated GPT-5.6 Luna worker. It records local, content-free telemetry and produces CLI, JSON, CSV, and HTML reports.",
+    "developerName": "Local developer",
+    "category": "Productivity",
+    "capabilities": [
+      "Read",
+      "Automation",
+      "Analytics"
+    ],
+    "defaultPrompt": [
+      "Use Codex Shunt to inspect this repository.",
+      "Show my Codex Shunt usage statistics.",
+      "Summarize this large test log with Codex Shunt."
+    ]
+  }
+}

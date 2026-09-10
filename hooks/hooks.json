@@ -1,0 +1,31 @@
+{
+  "description": "Observe large reads and optionally compress oversized command output with Codex Shunt.",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "^(Bash|mcp__.*(read|search|fetch).*)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$PLUGIN_ROOT/scripts/codex-shunt\" hook-pre",
+            "timeout": 5,
+            "statusMessage": "Checking whether Codex Shunt should route this read"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "^Bash$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$PLUGIN_ROOT/scripts/codex-shunt\" hook-post",
+            "timeout": 180,
+            "statusMessage": "Checking oversized command output"
+          }
+        ]
+      }
+    ]
+  }
+}

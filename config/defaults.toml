@@ -1,0 +1,12 @@
+mode = "shadow"
+worker_model = "gpt-5.6-luna"
+reasoning_effort = "low"
+min_file_lines = 500
+min_source_bytes = 100000
+max_source_files = 500
+max_source_bytes = 10000000
+max_output_chars = 12000
+post_tool_compression = false
+post_tool_min_bytes = 100000
+worker_timeout_seconds = 150
+retain_raw_worker_events = false
