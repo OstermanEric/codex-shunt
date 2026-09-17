@@ -15,12 +15,18 @@ from codex_shunt.worker import (
     SOL_RATES,
     _with_outer_sandbox_hint,
     credits_for,
+    ensure_source_sharing_acknowledged,
     find_codex,
     parse_usage,
 )
 
 
 class WorkerUsageTests(unittest.TestCase):
+    def test_worker_requires_source_sharing_acknowledgement(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "shunt setup"):
+            ensure_source_sharing_acknowledged({"source_sharing_acknowledged": False})
+        ensure_source_sharing_acknowledged({"source_sharing_acknowledged": True})
+
     def test_finds_codex_from_explicit_override_when_not_on_path(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             executable = Path(temporary) / "codex"

@@ -36,6 +36,7 @@ class PreHookTests(unittest.TestCase):
             source = root / "large.txt"
             source.write_text("line\n" * 600, encoding="utf-8")
             event = self._event(root, source)
+            event["tool_input"] = {"cmd": "rtk cat large.txt"}
             output = io.StringIO()
             environment = {
                 "CODEX_SHUNT_DATA_DIR": str(root / "data"),
@@ -54,10 +55,12 @@ class PreHookTests(unittest.TestCase):
             source = root / "large.txt"
             source.write_text("line\n" * 600, encoding="utf-8")
             event = self._event(root, source)
+            event["tool_input"] = {"cmd": "rtk cat large.txt"}
             output = io.StringIO()
             environment = {
                 "CODEX_SHUNT_DATA_DIR": str(root / "data"),
                 "CODEX_SHUNT_STRICT_ROUTING": "true",
+                "CODEX_SHUNT_SOURCE_SHARING_ACKNOWLEDGED": "true",
             }
             outcome = SimpleNamespace(
                 run_id="run-routed",
@@ -88,6 +91,25 @@ class PreHookTests(unittest.TestCase):
             self.assertEqual(worker.call_count, 1)
             self.assertEqual(worker.call_args.kwargs["task_kind"], "hook-routed-read")
 
+    def test_strict_mode_fails_open_without_source_sharing_acknowledgement(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "large.txt"
+            source.write_text("line\n" * 600, encoding="utf-8")
+            event = self._event(root, source)
+            output = io.StringIO()
+            environment = {
+                "CODEX_SHUNT_DATA_DIR": str(root / "data"),
+                "CODEX_SHUNT_STRICT_ROUTING": "true",
+                "CODEX_SHUNT_SOURCE_SHARING_ACKNOWLEDGED": "false",
+            }
+            with patch.dict(os.environ, environment, clear=False), patch(
+                "sys.stdin", io.StringIO(json.dumps(event))
+            ), patch("codex_shunt.hooks.run_worker") as worker, redirect_stdout(output):
+                self.assertEqual(hook_pre(), 0)
+            self.assertEqual(output.getvalue(), "")
+            worker.assert_not_called()
+
     def test_strict_mode_fails_open_when_worker_fails(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -98,6 +120,7 @@ class PreHookTests(unittest.TestCase):
             environment = {
                 "CODEX_SHUNT_DATA_DIR": str(root / "data"),
                 "CODEX_SHUNT_STRICT_ROUTING": "true",
+                "CODEX_SHUNT_SOURCE_SHARING_ACKNOWLEDGED": "true",
             }
             with patch.dict(os.environ, environment, clear=False), patch(
                 "sys.stdin", io.StringIO(json.dumps(event))
@@ -120,6 +143,7 @@ class PreHookTests(unittest.TestCase):
             environment = {
                 "CODEX_SHUNT_DATA_DIR": str(root / "data"),
                 "CODEX_SHUNT_STRICT_ROUTING": "true",
+                "CODEX_SHUNT_SOURCE_SHARING_ACKNOWLEDGED": "true",
             }
             with patch.dict(os.environ, environment, clear=False), patch(
                 "sys.stdin", io.StringIO(json.dumps(event))
@@ -138,6 +162,33 @@ class PreHookTests(unittest.TestCase):
                 "hook_event_name": "PostToolUse",
                 "tool_name": "Bash",
                 "tool_input": {"command": "pnpm test"},
+                "tool_response": "failure line\n" * 10000,
+                "model": "gpt-5.6-sol",
+            }
+            output = io.StringIO()
+            environment = {
+                "CODEX_SHUNT_DATA_DIR": str(root / "data"),
+                "CODEX_SHUNT_STRICT_ROUTING": "false",
+            }
+            with patch.dict(os.environ, environment, clear=False), patch(
+                "sys.stdin", io.StringIO(json.dumps(event))
+            ), redirect_stdout(output):
+                self.assertEqual(hook_post(), 0)
+                self.assertEqual(output.getvalue(), "")
+                summary = aggregate("all")["routing"]
+                self.assertEqual(summary["total"], 1)
+                self.assertEqual(summary["routed"], 1)
+
+    def test_post_hook_recognizes_exec_command_cmd_input(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            event = {
+                "session_id": "session-test",
+                "turn_id": "turn-test",
+                "cwd": str(root),
+                "hook_event_name": "PostToolUse",
+                "tool_name": "Bash",
+                "tool_input": {"cmd": "rtk pnpm test"},
                 "tool_response": "failure line\n" * 10000,
                 "model": "gpt-5.6-sol",
             }

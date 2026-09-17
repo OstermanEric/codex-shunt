@@ -14,6 +14,23 @@ from codex_shunt.config import get_data_dir, load_config
 
 
 class ConfigTests(unittest.TestCase):
+    def test_source_sharing_requires_explicit_acknowledgement_by_default(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            with patch.dict(
+                os.environ, {"CODEX_SHUNT_DATA_DIR": temporary}, clear=False
+            ):
+                config = load_config()
+            self.assertFalse(config["source_sharing_acknowledged"])
+
+    def test_source_sharing_environment_override_is_validated(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            environment = {
+                "CODEX_SHUNT_DATA_DIR": temporary,
+                "CODEX_SHUNT_SOURCE_SHARING_ACKNOWLEDGED": "true",
+            }
+            with patch.dict(os.environ, environment, clear=False):
+                self.assertTrue(load_config()["source_sharing_acknowledged"])
+
     def test_plugin_data_is_default_writable_location_for_hooks(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             plugin_data = Path(temporary) / "plugin-data"

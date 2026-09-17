@@ -13,15 +13,29 @@ worker unless `codex login status` reports ChatGPT authentication.
 
 ## Quick start
 
-Install the plugin, review and trust its hooks once, and start a new Codex task.
-That is enough for Codex to use the bundled worker: no API key, package manager,
-shell profile edit, symlink, cache clearing, or generated absolute path is
-required.
+Install the plugin, review and trust its hooks once, and run the guided setup:
 
-Codex Shunt starts with strict routing off. The skill can still delegate a
-large, predictable read explicitly. Turn on automatic interception by asking
-Codex to enable strict routing, or—if you installed the optional terminal
-command—run:
+```bash
+shunt setup
+```
+
+Setup shows the source-sharing disclosure, verifies Python, the Codex CLI,
+ChatGPT subscription authentication, plugin files, configuration, and local
+storage, then records your acknowledgement locally. To prove the complete path
+and enable automatic routing in one pass, use:
+
+```bash
+shunt setup --test-worker --enable-strict-routing
+```
+
+The worker test sends only a synthetic two-line fixture. In a non-interactive
+environment, add `--accept-source-sharing` after reviewing the disclosure. No
+API key, package manager, shell profile edit, cache clearing, or generated
+absolute path is required.
+
+Codex Shunt starts with strict routing off. After setup, the skill can delegate
+a large, predictable read explicitly. Turn on automatic interception by asking
+Codex to enable strict routing, or run:
 
 ```bash
 shunt config set strict_routing true
@@ -34,8 +48,9 @@ optional command installer:
 "$HOME/plugins/codex-shunt/scripts/install-command"
 ```
 
-It creates `~/.local/bin/shunt` without modifying shell startup files. Verify
-the runtime with either `shunt status` or `shunt doctor`:
+It creates `~/.local/bin/shunt` without modifying shell startup files. The
+installer directs you to setup; later, verify the runtime with either
+`shunt status` or `shunt doctor`:
 
 ```bash
 shunt status
@@ -108,6 +123,10 @@ flowchart TD
 
 The worker process disables hooks and sets `CODEX_SHUNT_WORKER=1`, preventing
 recursive routing.
+
+Before any worker can receive repository content, setup must record an explicit
+source-sharing acknowledgement. Strict hooks fail open when acknowledgement is
+missing, and `shunt inspect` refuses to launch a worker.
 
 `PostToolUse` can also detect oversized test, build, lint, and compiler output.
 Compression is disabled by default. When explicitly enabled with strict routing,
@@ -184,7 +203,7 @@ Or, when `codex` is not on `PATH`:
 Then run:
 
 ```bash
-shunt doctor
+shunt setup
 ```
 
 For a nonstandard installation, pin the executable explicitly:
@@ -198,6 +217,10 @@ Codex Shunt deliberately requires ChatGPT authentication so worker runs use the
 Codex subscription allowance rather than API billing. An advanced local test can
 set `CODEX_SHUNT_REQUIRE_CHATGPT_AUTH=0`, but that removes the subscription-only
 guard and is not recommended for ordinary use.
+
+Authentication and source authorization are separate checks. A valid ChatGPT
+login establishes how the worker is billed; `shunt setup` records that you
+understand selected file contents are sent to a separate Codex model invocation.
 
 ## Install from the personal marketplace
 
@@ -300,6 +323,9 @@ by default). Explicitly bounded `head`, `tail`, and `sed -n` line ranges below
 the line threshold remain direct so the primary model can verify focused cited
 ranges without triggering another worker.
 
+Current code-mode `exec_command` calls are supported alongside legacy Bash
+events; Shunt accepts either the `cmd` or `command` tool-input field.
+
 The `PostToolUse` hook watches recognized test, build, lint, type-check, and
 compiler commands. Output qualifies at `post_tool_min_bytes` (100000 bytes by
 default). Compression occurs only when `strict_routing` and
@@ -352,11 +378,16 @@ Use `shunt config set KEY VALUE`. Operator settings are written to
 `$HOME/.local/share/codex-shunt/config.toml`, so the same switch applies from a
 normal terminal and from installed hooks. Hook telemetry uses Codex's writable
 `PLUGIN_DATA` directory; explicit terminal runs use
-`$HOME/.local/share/codex-shunt` unless `CODEX_SHUNT_DATA_DIR` is set.
+`$HOME/.local/share/codex-shunt` unless `CODEX_SHUNT_DATA_DIR` is set. Reporting
+commands automatically discover and merge both locations, including Codex
+plugin-data directories under `CODEX_HOME`, so hook activity appears in the
+normal `shunt stats` view. An explicit `CODEX_SHUNT_DATA_DIR` intentionally
+limits reporting to that one store.
 
 | Key | Default | When and why to change it | Example |
 | --- | --- | --- | --- |
 | `strict_routing` | `false` | Set true to route qualifying reads directly through Luna | `shunt config set strict_routing true` |
+| `source_sharing_acknowledged` | `false` | Set only by the guided disclosure; set false to revoke and disable strict routing | `shunt setup` |
 | `worker_model` | `gpt-5.6-luna` | Keep Luna for low-credit bulk work; change only for controlled comparisons | `shunt config set worker_model gpt-5.6-terra` |
 | `reasoning_effort` | `low` | Raise for harder classification, accepting more latency and usage | `shunt config set reasoning_effort medium` |
 | `min_file_lines` | `500` | Raise to route fewer reads; lower to route more | `shunt config set min_file_lines 800` |
@@ -384,7 +415,8 @@ shunt config set post_tool_compression false
 
 | Command | When to use it | What it does |
 | --- | --- | --- |
-| `shunt status [--json]` / `shunt doctor [--json]` | Installation and troubleshooting | Checks Python, Codex discovery, ChatGPT auth, plugin files, storage, and config |
+| `shunt setup [--test-worker] [--enable-strict-routing]` | First run or end-to-end recheck | Discloses source sharing, records acknowledgement, checks prerequisites, and optionally verifies Luna |
+| `shunt status [--json]` / `shunt doctor [--json]` | Installation and troubleshooting | Checks Python, Codex discovery, ChatGPT auth, source acknowledgement, plugin files, storage, and config |
 | `shunt config show` | Before testing or tuning | Prints the effective configuration |
 | `shunt config set KEY VALUE` | Changing routing behavior | Writes one validated user setting |
 | `shunt inspect ...` | Predictable repository-wide evidence collection | Sends approved files to a read-only Luna worker |
@@ -401,6 +433,7 @@ shunt config set post_tool_compression false
 ### Check setup
 
 ```bash
+shunt setup
 shunt doctor
 shunt doctor --json
 ```
@@ -443,6 +476,11 @@ shunt stats --since all --json
 ```
 
 `--since` accepts `all`, `<N>h`, `<N>d`, or an ISO timestamp.
+
+Stats, reports, and exports discover the normal terminal database and Codex
+plugin-data telemetry automatically. They open telemetry read-only, so
+reporting still works when the active hook store is writable only to the
+Codex plugin runtime.
 
 The terminal view leads with estimated credits saved, estimated primary-model
 context avoided by enforced routing, worker success, and citation validity.
@@ -610,6 +648,12 @@ The source collector:
 - validates returned citations locally;
 - deletes the isolated workspace after the run.
 
+Selected eligible source is still transmitted to OpenAI for the separate Luna
+invocation. Using the same ChatGPT subscription avoids API-key billing but does
+not make every file appropriate to send. Setup therefore requires explicit
+acknowledgement, and users remain responsible for repository policy, contractual
+restrictions, regulated data, and secrets that do not match the built-in filters.
+
 The hook is a routing aid, not a complete security boundary. The primary model
 must verify material citations and own final judgment.
 
@@ -642,7 +686,7 @@ python3 -m unittest discover \
 Run setup diagnostics:
 
 ```bash
-shunt doctor
+shunt setup --test-worker
 ```
 
 Perform a real subscription-worker smoke test from a repository:

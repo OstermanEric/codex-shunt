@@ -34,6 +34,14 @@ class WorkerError(RuntimeError):
     """Raised when a Luna worker cannot provide a valid result."""
 
 
+def ensure_source_sharing_acknowledged(config: dict[str, Any]) -> None:
+    if not config.get("source_sharing_acknowledged", False):
+        raise WorkerError(
+            "Source sharing has not been acknowledged. Run `shunt setup` interactively or "
+            "`shunt setup --accept-source-sharing` before sending repository content to Luna."
+        )
+
+
 @dataclass(frozen=True)
 class WorkerOutcome:
     run_id: str
@@ -247,6 +255,7 @@ def run_worker(
     turn_id: str | None = None,
     parent_model: str | None = None,
 ) -> WorkerOutcome:
+    ensure_source_sharing_acknowledged(config)
     run_id = str(uuid.uuid4())
     codex = find_codex()
     worker_model = str(config["worker_model"])

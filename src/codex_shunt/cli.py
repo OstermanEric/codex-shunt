@@ -10,12 +10,14 @@ import json
 import os
 import platform
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any
 
 from . import __version__
 from .config import (
     PLUGIN_ROOT,
+    SOURCE_SHARING_NOTICE,
     get_data_dir,
     load_config,
     parse_config_value,
@@ -180,7 +182,7 @@ def command_summarize_log(args: argparse.Namespace) -> int:
     return command_inspect(args)
 
 
-def command_doctor(args: argparse.Namespace) -> int:
+def _doctor_checks() -> list[dict[str, Any]]:
     checks: list[dict[str, Any]] = []
     checks.append(
         {
@@ -223,6 +225,18 @@ def command_doctor(args: argparse.Namespace) -> int:
         checks.append({"name": "data_directory", "ok": False, "detail": str(exc)})
     try:
         config = load_config()
+        sharing_allowed = bool(config["source_sharing_acknowledged"])
+        checks.append(
+            {
+                "name": "source_sharing",
+                "ok": sharing_allowed,
+                "detail": (
+                    "acknowledged"
+                    if sharing_allowed
+                    else "not acknowledged; run `shunt setup`"
+                ),
+            }
+        )
         checks.append(
             {
                 "name": "configuration",
@@ -235,13 +249,106 @@ def command_doctor(args: argparse.Namespace) -> int:
         )
     except Exception as exc:
         checks.append({"name": "configuration", "ok": False, "detail": str(exc)})
+    return checks
+
+
+def _print_checks(checks: list[dict[str, Any]]) -> None:
+    for item in checks:
+        marker = "PASS" if item["ok"] else "FAIL"
+        print(f"[{marker}] {item['name']}: {item['detail']}")
+
+
+def command_setup(args: argparse.Namespace) -> int:
+    print("Codex Shunt source-sharing disclosure\n")
+    print(SOURCE_SHARING_NOTICE)
+    print()
+
+    accepted = bool(args.accept_source_sharing)
+    if not accepted and sys.stdin.isatty():
+        response = input("Type 'accept' to continue, or press Enter to cancel: ").strip().lower()
+        accepted = response == "accept"
+    if not accepted:
+        print(
+            "No configuration was changed. Run again interactively, or pass "
+            "--accept-source-sharing after reviewing the disclosure.",
+            file=sys.stderr,
+        )
+        return 2
+
+    config = load_config()
+    config["source_sharing_acknowledged"] = True
+    if args.enable_strict_routing:
+        # Enable only after the optional (and implied) worker test succeeds.
+        config["strict_routing"] = False
+    path = save_user_config(config)
+    print(f"\nSaved source-sharing acknowledgement to {path}")
+
+    checks = _doctor_checks()
+    _print_checks(checks)
+    if not all(item["ok"] for item in checks):
+        return 1
+
+    should_test_worker = bool(args.test_worker or args.enable_strict_routing)
+    if should_test_worker:
+        print("\nTesting the subscription-authenticated read-only Luna worker...")
+        with tempfile.TemporaryDirectory(prefix="codex-shunt-setup-") as temporary:
+            root = Path(temporary)
+            sample = root / "setup-check.txt"
+            sample.write_text(
+                "Codex Shunt setup check.\n"
+                "The expected safety mode is read-only.\n",
+                encoding="utf-8",
+            )
+            selection = collect_sources(
+                root,
+                [sample.name],
+                max_files=int(config["max_source_files"]),
+                max_bytes=int(config["max_source_bytes"]),
+            )
+            outcome = run_worker(
+                question=(
+                    "Confirm the safety mode stated in setup-check.txt. Return one concise "
+                    "finding with an exact citation."
+                ),
+                selection=selection,
+                config=config,
+                task_kind="setup-smoke",
+            )
+        if outcome.citation_count < 1 or outcome.valid_citation_count != outcome.citation_count:
+            raise WorkerError(
+                "The Luna setup check returned without a locally valid citation; "
+                "strict routing was not enabled"
+            )
+        print(
+            f"[PASS] luna_worker: {outcome.worker_model}, "
+            f"{outcome.duration_ms / 1000:.1f}s, "
+            f"{outcome.valid_citation_count}/{outcome.citation_count} citations valid"
+        )
+
+    if args.enable_strict_routing:
+        config["strict_routing"] = True
+        save_user_config(config)
+        print("[PASS] strict_routing: enabled after successful worker verification")
+    elif config["strict_routing"]:
+        print("\nStrict routing remains enabled.")
+    else:
+        print("\nStrict routing remains off. Enable it later with:")
+        print("  shunt config set strict_routing true")
+
+    print(
+        "\nSetup complete. In a sandboxed Codex task, approve only the narrowly scoped "
+        "Shunt launcher when prompted; the Luna child remains ephemeral and read-only."
+    )
+    return 0
+
+
+def command_doctor(args: argparse.Namespace) -> int:
+    checks = _doctor_checks()
 
     if args.json:
         print(json.dumps({"ok": all(item["ok"] for item in checks), "checks": checks}, indent=2))
     else:
-        for item in checks:
-            marker = "PASS" if item["ok"] else "FAIL"
-            print(f"[{marker}] {item['name']}: {item['detail']}")
+        _print_checks(checks)
     return 0 if all(item["ok"] for item in checks) else 1
 
 
@@ -253,9 +360,21 @@ def command_config(args: argparse.Namespace) -> int:
             print(f"{key} = {json.dumps(value)}")
         return 0
     value = parse_config_value(args.key, args.value, config)
+    if args.key == "source_sharing_acknowledged" and value is True:
+        raise ValueError(
+            "Use `shunt setup` to review and acknowledge the source-sharing disclosure"
+        )
+    if args.key == "strict_routing" and value is True and not config[
+        "source_sharing_acknowledged"
+    ]:
+        raise ValueError("Run `shunt setup` before enabling strict routing")
     config[args.key] = value
+    if args.key == "source_sharing_acknowledged" and value is False:
+        config["strict_routing"] = False
     path = save_user_config(config)
     print(f"Set {args.key} = {json.dumps(value)}")
+    if args.key == "source_sharing_acknowledged" and value is False:
+        print("Strict routing was also disabled.")
     print(f"Saved {path}")
     return 0
 
@@ -571,6 +690,26 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     commands = parser.add_subparsers(dest="command", required=True)
+
+    setup = commands.add_parser(
+        "setup", help="Review source sharing, verify auth, and optionally test the worker"
+    )
+    setup.add_argument(
+        "--accept-source-sharing",
+        action="store_true",
+        help="Non-interactively acknowledge the printed source-sharing disclosure",
+    )
+    setup.add_argument(
+        "--test-worker",
+        action="store_true",
+        help="Send a synthetic two-line fixture through the read-only Luna worker",
+    )
+    setup.add_argument(
+        "--enable-strict-routing",
+        action="store_true",
+        help="Test the worker and enable automatic routing only after it succeeds",
+    )
+    setup.set_defaults(handler=command_setup)
 
     inspect = commands.add_parser("inspect", help="Analyze selected paths with the Luna worker")
     inspect.add_argument("paths", nargs="+", help="Files or directories inside --root")

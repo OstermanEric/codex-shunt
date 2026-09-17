@@ -16,6 +16,14 @@ PLUGIN_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CONFIG_PATH = PLUGIN_ROOT / "config" / "defaults.toml"
 ALLOWED_LEGACY_MODES = {"off", "shadow", "enforce"}
 
+SOURCE_SHARING_NOTICE = """Codex Shunt sends the contents of selected eligible text files to a
+separate GPT-5.6 Luna Codex invocation using your existing ChatGPT/Codex login.
+No API key is used, but the worker consumes your subscription allowance or credits.
+Common secret-bearing paths and generated files are excluded, and the worker is
+ephemeral and read-only. Filtering is not a guarantee: do not select credentials,
+private keys, regulated data, or source you are not permitted to process with Codex.
+Local telemetry stores counts and hashes, not source text, prompts, or worker answers."""
+
 
 def get_data_dir() -> Path:
     override = os.environ.get("CODEX_SHUNT_DATA_DIR")
@@ -73,13 +81,23 @@ def load_config() -> dict[str, Any]:
         if mode not in ALLOWED_LEGACY_MODES:
             raise ValueError("CODEX_SHUNT_MODE must be one of: off, shadow, enforce")
         config["strict_routing"] = mode == "enforce"
+
+    sharing_override = os.environ.get("CODEX_SHUNT_SOURCE_SHARING_ACKNOWLEDGED")
+    if sharing_override is not None:
+        normalized = sharing_override.strip().lower()
+        if normalized not in {"true", "false", "1", "0"}:
+            raise ValueError(
+                "CODEX_SHUNT_SOURCE_SHARING_ACKNOWLEDGED expects true, false, 1, or 0"
+            )
+        config["source_sharing_acknowledged"] = normalized in {"true", "1"}
     validate_config(config)
     return config
 
 
 def validate_config(config: dict[str, Any]) -> None:
-    if not isinstance(config.get("strict_routing"), bool):
-        raise ValueError("strict_routing must be true or false")
+    for key in ("strict_routing", "source_sharing_acknowledged"):
+        if not isinstance(config.get(key), bool):
+            raise ValueError(f"{key} must be true or false")
     for key in (
         "min_file_lines",
         "min_source_bytes",

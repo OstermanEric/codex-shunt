@@ -45,6 +45,17 @@ def _read_event() -> dict[str, Any]:
     return payload
 
 
+def _shell_command(tool_input: Any) -> str:
+    """Return the command from legacy Bash or current exec_command input."""
+    if not isinstance(tool_input, dict):
+        return ""
+    for key in ("command", "cmd"):
+        value = tool_input.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return ""
+
+
 def _command_paths(command: str, cwd: Path) -> list[Path]:
     try:
         tokens = shlex.split(command)
@@ -188,10 +199,8 @@ def hook_pre() -> int:
     tool_name = str(event.get("tool_name", ""))
     tool_input = event.get("tool_input")
     cwd = Path(str(event.get("cwd") or os.getcwd())).resolve()
-    command = tool_input.get("command", "") if isinstance(tool_input, dict) else ""
-    if isinstance(command, str) and (
-        "CODEX_SHUNT_BYPASS=1" in command or "codex-shunt" in command
-    ):
+    command = _shell_command(tool_input)
+    if "CODEX_SHUNT_BYPASS=1" in command or "codex-shunt" in command:
         return 0
 
     paths = _command_paths(command, cwd) if tool_name == "Bash" else _mcp_paths(tool_input, cwd)
@@ -209,6 +218,10 @@ def hook_pre() -> int:
     reason = "large-predictable-read"
     if not config["strict_routing"]:
         _record_route(event, "would_route", reason, metrics)
+        return 0
+    if not config["source_sharing_acknowledged"]:
+        _record_route(event, "route_failed", "source-sharing-not-acknowledged", metrics)
+        _debug("strict routing skipped: run `shunt setup` to acknowledge source sharing")
         return 0
 
     relative_paths: list[str] = []
@@ -328,8 +341,8 @@ def hook_post() -> int:
         _debug(f"post-hook initialization failed: {exc}")
         return 0
     tool_input = event.get("tool_input")
-    command = tool_input.get("command", "") if isinstance(tool_input, dict) else ""
-    if not isinstance(command, str) or "CODEX_SHUNT_BYPASS=1" in command or "codex-shunt" in command:
+    command = _shell_command(tool_input)
+    if not command or "CODEX_SHUNT_BYPASS=1" in command or "codex-shunt" in command:
         return 0
     lowered = f" {command.lower()}"
     if not any(marker in lowered for marker in OUTPUT_COMMAND_MARKERS):
@@ -345,9 +358,10 @@ def hook_post() -> int:
         "source_lines": content.count("\n") + 1,
         "estimated_source_tokens": (content_bytes + 3) // 4,
     }
+    sharing_allowed = bool(config["source_sharing_acknowledged"])
     decision = (
         "compress"
-        if config["strict_routing"] and config["post_tool_compression"]
+        if config["strict_routing"] and config["post_tool_compression"] and sharing_allowed
         else "would_compress"
     )
     _record_route(event, decision, "oversized-command-output", metrics)

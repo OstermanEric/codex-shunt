@@ -73,6 +73,7 @@ class PackagedPluginTests(unittest.TestCase):
                 {
                     "CODEX_SHUNT_CODEX_PATH": str(fake_codex),
                     "CODEX_SHUNT_DATA_DIR": str(data_dir),
+                    "CODEX_SHUNT_SOURCE_SHARING_ACKNOWLEDGED": "true",
                     "FAKE_CODEX_LOG": str(log_path),
                 }
             )
@@ -137,7 +138,7 @@ class PackagedPluginTests(unittest.TestCase):
                 "cwd": str(fixture),
                 "hook_event_name": "PreToolUse",
                 "tool_name": "Bash",
-                "tool_input": {"command": "cat large.txt"},
+                "tool_input": {"cmd": "rtk cat large.txt"},
                 "model": "gpt-5.6-sol",
             }
             environment = os.environ.copy()
@@ -177,7 +178,7 @@ class PackagedPluginTests(unittest.TestCase):
                 "cwd": str(fixture),
                 "hook_event_name": "PreToolUse",
                 "tool_name": "Bash",
-                "tool_input": {"command": "cat large.txt"},
+                "tool_input": {"cmd": "rtk cat large.txt"},
                 "model": "gpt-5.6-sol",
             }
             environment = os.environ.copy()
@@ -188,6 +189,7 @@ class PackagedPluginTests(unittest.TestCase):
                     "PLUGIN_DATA": str(plugin_data),
                     "CODEX_SHUNT_CODEX_PATH": str(fake_codex),
                     "CODEX_SHUNT_STRICT_ROUTING": "true",
+                    "CODEX_SHUNT_SOURCE_SHARING_ACKNOWLEDGED": "true",
                     "FAKE_CODEX_LOG": str(log_path),
                 }
             )

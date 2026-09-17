@@ -63,4 +63,4 @@ case ":${PATH:-}:" in
     ;;
 esac
 
-printf 'Run: shunt doctor\n'
+printf 'Run: shunt setup\n'

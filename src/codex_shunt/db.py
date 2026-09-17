@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-import json
+import os
 import sqlite3
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
+from urllib.parse import quote
 
 from .config import get_data_dir
 
@@ -82,6 +83,52 @@ def database_path() -> Path:
     return get_data_dir() / "metrics.sqlite3"
 
 
+def _default_data_dir() -> Path:
+    return Path.home() / ".local" / "share" / "codex-shunt"
+
+
+def metrics_paths() -> list[Path]:
+    """Return unique telemetry stores available to reporting commands.
+
+    Hooks may receive a writable PLUGIN_DATA directory while terminal commands
+    do not. Keep explicit overrides isolated, but discover both the normal
+    terminal store and Codex plugin-data stores for the default reporting path.
+    """
+    override = os.environ.get("CODEX_SHUNT_DATA_DIR")
+    if override:
+        candidates = [Path(override).expanduser().resolve()]
+    else:
+        candidates = [get_data_dir(), _default_data_dir()]
+        for key in ("PLUGIN_DATA", "CLAUDE_PLUGIN_DATA"):
+            value = os.environ.get(key)
+            if value:
+                candidates.append(Path(value).expanduser().resolve())
+
+        codex_home = Path(
+            os.environ.get("CODEX_HOME", str(Path.home() / ".codex"))
+        ).expanduser()
+        plugin_data_root = codex_home / "plugins" / "data"
+        try:
+            candidates.extend(
+                path.parent
+                for path in plugin_data_root.glob("*/metrics.sqlite3")
+                if path.is_file()
+            )
+        except OSError:
+            pass
+
+    unique: list[Path] = []
+    seen: set[Path] = set()
+    for candidate in candidates:
+        resolved = candidate.expanduser().resolve()
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        if (resolved / "metrics.sqlite3").is_file() or override:
+            unique.append(resolved)
+    return unique
+
+
 def connect() -> sqlite3.Connection:
     path = database_path()
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -89,6 +136,28 @@ def connect() -> sqlite3.Connection:
     connection.row_factory = sqlite3.Row
     connection.executescript(SCHEMA)
     return connection
+
+
+def _connect_readonly(data_dir: Path) -> sqlite3.Connection | None:
+    path = data_dir / "metrics.sqlite3"
+    if not path.is_file():
+        return None
+    uri = f"file:{quote(str(path), safe='/')}?mode=ro"
+    try:
+        connection = sqlite3.connect(uri, uri=True)
+        connection.row_factory = sqlite3.Row
+        tables = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            ).fetchall()
+        }
+        if not {"routing_events", "worker_runs", "feedback"}.issubset(tables):
+            connection.close()
+            return None
+        return connection
+    except sqlite3.Error:
+        return None
 
 
 def record_routing_event(**values: Any) -> str:
@@ -202,62 +271,104 @@ def fetch_rows(table: str, since: str) -> list[dict[str, Any]]:
         raise ValueError(f"Unsupported table: {table}")
     start = since_timestamp(since)
     query = f"SELECT * FROM {table}"
-    parameters: tuple[Any, ...] = ()
+    parameters: tuple[Any, ...] = (start,) if start else ()
     if start:
         query += " WHERE created_at >= ?"
-        parameters = (start,)
     query += " ORDER BY created_at DESC"
-    with connect() as connection:
-        return [dict(row) for row in connection.execute(query, parameters).fetchall()]
+
+    rows_by_id: dict[str, dict[str, Any]] = {}
+    for data_dir in metrics_paths():
+        connection = _connect_readonly(data_dir)
+        if connection is None:
+            continue
+        try:
+            for row in connection.execute(query, parameters).fetchall():
+                rendered = dict(row)
+                rows_by_id.setdefault(str(rendered["id"]), rendered)
+        except sqlite3.Error:
+            pass
+        finally:
+            connection.close()
+    return sorted(rows_by_id.values(), key=lambda row: row["created_at"], reverse=True)
 
 
 def aggregate(since: str) -> dict[str, Any]:
-    start = since_timestamp(since)
-    where = " WHERE created_at >= ?" if start else ""
-    parameters: tuple[Any, ...] = (start,) if start else ()
-    with connect() as connection:
-        routing = connection.execute(
-            f"""SELECT COUNT(*) AS total,
-                SUM(CASE WHEN decision IN ('would_route', 'deny', 'would_compress', 'compress') THEN 1 ELSE 0 END) AS routed,
-                SUM(CASE WHEN decision IN ('deny', 'compress') THEN 1 ELSE 0 END) AS enforced,
-                COALESCE(SUM(CASE WHEN decision IN ('would_route', 'deny', 'would_compress', 'compress') THEN estimated_source_tokens ELSE 0 END), 0) AS estimated_tokens,
-                COALESCE(SUM(CASE WHEN decision IN ('deny', 'compress') THEN estimated_source_tokens ELSE 0 END), 0) AS estimated_intercepted_tokens
-                FROM routing_events{where}""",
-            parameters,
-        ).fetchone()
-        workers = connection.execute(
-            f"""SELECT COUNT(*) AS total,
-                SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) AS succeeded,
-                COALESCE(SUM(input_tokens), 0) AS input_tokens,
-                COALESCE(SUM(cached_input_tokens), 0) AS cached_input_tokens,
-                COALESCE(SUM(output_tokens), 0) AS output_tokens,
-                COALESCE(SUM(reasoning_output_tokens), 0) AS reasoning_output_tokens,
-                COALESCE(SUM(actual_worker_credits), 0) AS worker_credits,
-                COALESCE(SUM(sol_equivalent_credits), 0) AS sol_credits,
-                COALESCE(AVG(duration_ms), 0) AS average_duration_ms,
-                COALESCE(SUM(citation_count), 0) AS citations,
-                COALESCE(SUM(valid_citation_count), 0) AS valid_citations,
-                COALESCE(SUM(needs_escalation), 0) AS escalations
-                FROM worker_runs{where}""",
-            parameters,
-        ).fetchone()
-        by_model = connection.execute(
-            f"""SELECT worker_model, COUNT(*) AS runs,
-                COALESCE(SUM(input_tokens + output_tokens + reasoning_output_tokens), 0) AS tokens,
-                COALESCE(SUM(actual_worker_credits), 0) AS credits
-                FROM worker_runs{where}
-                GROUP BY worker_model ORDER BY runs DESC""",
-            parameters,
-        ).fetchall()
-        feedback = connection.execute(
-            f"""SELECT verdict, COUNT(*) AS count FROM feedback{where}
-                GROUP BY verdict""",
-            parameters,
-        ).fetchall()
+    routing_rows = fetch_rows("routing_events", since)
+    worker_rows = fetch_rows("worker_runs", since)
+    feedback_rows = fetch_rows("feedback", since)
+
+    routed_decisions = {"would_route", "deny", "would_compress", "compress"}
+    enforced_decisions = {"deny", "compress"}
+    routing = {
+        "total": len(routing_rows),
+        "routed": sum(row["decision"] in routed_decisions for row in routing_rows),
+        "enforced": sum(row["decision"] in enforced_decisions for row in routing_rows),
+        "estimated_tokens": sum(
+            int(row["estimated_source_tokens"] or 0)
+            for row in routing_rows
+            if row["decision"] in routed_decisions
+        ),
+        "estimated_intercepted_tokens": sum(
+            int(row["estimated_source_tokens"] or 0)
+            for row in routing_rows
+            if row["decision"] in enforced_decisions
+        ),
+    }
+    worker_total = len(worker_rows)
+    workers = {
+        "total": worker_total,
+        "succeeded": sum(row["status"] == "success" for row in worker_rows),
+        "input_tokens": sum(int(row["input_tokens"] or 0) for row in worker_rows),
+        "cached_input_tokens": sum(
+            int(row["cached_input_tokens"] or 0) for row in worker_rows
+        ),
+        "output_tokens": sum(int(row["output_tokens"] or 0) for row in worker_rows),
+        "reasoning_output_tokens": sum(
+            int(row["reasoning_output_tokens"] or 0) for row in worker_rows
+        ),
+        "worker_credits": sum(
+            float(row["actual_worker_credits"] or 0) for row in worker_rows
+        ),
+        "sol_credits": sum(
+            float(row["sol_equivalent_credits"] or 0) for row in worker_rows
+        ),
+        "average_duration_ms": (
+            sum(int(row["duration_ms"] or 0) for row in worker_rows) / worker_total
+            if worker_total
+            else 0
+        ),
+        "citations": sum(int(row["citation_count"] or 0) for row in worker_rows),
+        "valid_citations": sum(
+            int(row["valid_citation_count"] or 0) for row in worker_rows
+        ),
+        "escalations": sum(int(row["needs_escalation"] or 0) for row in worker_rows),
+    }
+    models: dict[str, dict[str, Any]] = {}
+    for row in worker_rows:
+        model = str(row["worker_model"])
+        summary = models.setdefault(
+            model,
+            {"worker_model": model, "runs": 0, "tokens": 0, "credits": 0.0},
+        )
+        summary["runs"] += 1
+        summary["tokens"] += sum(
+            int(row[key] or 0)
+            for key in ("input_tokens", "output_tokens", "reasoning_output_tokens")
+        )
+        summary["credits"] += float(row["actual_worker_credits"] or 0)
+    by_model = sorted(models.values(), key=lambda row: row["runs"], reverse=True)
+    feedback_counts: dict[str, int] = {}
+    for row in feedback_rows:
+        verdict = str(row["verdict"])
+        feedback_counts[verdict] = feedback_counts.get(verdict, 0) + 1
+    feedback = [
+        {"verdict": verdict, "count": count}
+        for verdict, count in feedback_counts.items()
+    ]
     return {
         "since": since,
-        "routing": dict(routing),
-        "workers": dict(workers),
-        "by_model": [dict(row) for row in by_model],
-        "feedback": [dict(row) for row in feedback],
+        "routing": routing,
+        "workers": workers,
+        "by_model": by_model,
+        "feedback": feedback,
     }

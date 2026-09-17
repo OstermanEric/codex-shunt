@@ -25,7 +25,13 @@ in the primary model and tell the user the plugin installation is incomplete.
 ## Route a read
 
 1. Formulate one narrow question and the smallest useful set of repository paths.
-2. Run:
+2. Before the first worker run, check `shunt status`. If source sharing is not
+   acknowledged, explain that the filtered contents of the selected files will
+   be sent to a separate, ephemeral, read-only Luna invocation using the same
+   ChatGPT/Codex login and subscription allowance. Then run `shunt setup`
+   interactively, or use `shunt setup --accept-source-sharing` only after the
+   user has explicitly accepted that disclosure.
+3. Run:
 
    ```bash
    "<resolved-plugin-root>/scripts/codex-shunt" inspect \
@@ -34,9 +40,9 @@ in the primary model and tell the user the plugin installation is incomplete.
      <path> [<path> ...]
    ```
 
-3. Treat the worker response as evidence, not final judgment.
-4. Reread only the cited ranges needed to verify material claims.
-5. If the worker fails or asks for escalation, continue in the primary model. A
+4. Treat the worker response as evidence, not final judgment.
+5. Reread only the cited ranges needed to verify material claims.
+6. If the worker fails or asks for escalation, continue in the primary model. A
    direct read blocked by the hook can be retried once by prefixing the command
    with `CODEX_SHUNT_BYPASS=1`.
 
@@ -52,12 +58,27 @@ result before denying the original broad read. It must fail open: if the runner,
 configuration, telemetry, authentication, or worker fails, allow the original
 tool call.
 
+The hook accepts both the legacy Bash `tool_input.command` field and the
+`tool_input.cmd` field used by current code-mode `exec_command` calls. Codex
+still exposes both forms to hook matchers as `Bash`.
+
 When the user asks to enable or disable strict routing, run:
 
 ```bash
 "<resolved-plugin-root>/scripts/codex-shunt" config set strict_routing true
 "<resolved-plugin-root>/scripts/codex-shunt" config set strict_routing false
 ```
+
+Enabling strict routing requires the source-sharing acknowledgement. For a
+first-time setup, prefer:
+
+```bash
+"<resolved-plugin-root>/scripts/codex-shunt" setup \
+  --accept-source-sharing --enable-strict-routing
+```
+
+`--enable-strict-routing` first sends a synthetic two-line fixture through Luna
+and persists strict mode only if that end-to-end check succeeds.
 
 Do not ask the user to clear plugin caches. A legacy `mode = "enforce"` setting
 is migrated automatically.
@@ -74,6 +95,11 @@ local authentication/runtime services and Shunt's metrics database.
 This does not relax the Luna worker: Shunt copies filtered sources into a
 temporary workspace and launches the child with `--sandbox read-only`. Never
 replace that child policy with `--dangerously-bypass-approvals-and-sandbox`.
+
+The approval justification must disclose both facts: which selected repository
+paths will be sent to the separate Luna invocation, and that the outer launcher
+needs host access only for Codex authentication/runtime services and local
+metrics. Do not describe this merely as a local read or omit the model transfer.
 
 If an in-sandbox attempt reports a read-only state database, an unavailable
 metrics database, or failure to initialize the in-process app-server client,
@@ -92,6 +118,9 @@ Use the runner for metrics and reports:
 
 Worker token counts are exact. Primary-context tokens avoided and
 Sol-equivalent credits are estimates and must stay labeled as estimates.
+Stats, reports, and exports automatically discover the terminal store and
+Codex plugin-data stores; use `CODEX_SHUNT_DATA_DIR` only when intentionally
+scoping a report to one metrics database.
 
 ## Routing boundaries
 
