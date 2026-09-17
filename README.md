@@ -31,7 +31,7 @@ shunt setup --test-worker --enable-strict-routing
 The worker test sends only a synthetic two-line fixture. In a non-interactive
 environment, add `--accept-source-sharing` after reviewing the disclosure. No
 API key, package manager, shell profile edit, cache clearing, or generated
-absolute path is required.
+data-path override is required.
 
 Codex Shunt starts with strict routing off. After setup, the skill can delegate
 a large, predictable read explicitly. Turn on automatic interception by asking
@@ -43,6 +43,9 @@ shunt config set strict_routing true
 
 For direct use from an ordinary Terminal, the source checkout includes an
 optional command installer:
+
+The examples use `$HOME/plugins/codex-shunt` as the checkout path. Replace it
+with the actual location of this repository if it lives elsewhere.
 
 ```bash
 "$HOME/plugins/codex-shunt/scripts/install-command"
@@ -222,15 +225,16 @@ Authentication and source authorization are separate checks. A valid ChatGPT
 login establishes how the worker is billed; `shunt setup` records that you
 understand selected file contents are sent to a separate Codex model invocation.
 
-## Install from the personal marketplace
+## Install from a marketplace
 
-This development copy is registered in the default personal marketplace at:
+This development checkout is registered in the default personal marketplace on
+the maintainer's machine at:
 
 ```text
 $HOME/.agents/plugins/marketplace.json
 ```
 
-Install it with:
+If your configured marketplace points to this checkout, install it with:
 
 ```bash
 codex plugin add codex-shunt@personal
@@ -246,6 +250,10 @@ If `codex` is not on `PATH`, use the desktop-bundled executable:
 Review the plugin's hook definition when Codex asks whether to trust it. Plugin
 installation does not automatically trust hook scripts. Start a **new Codex
 task** after installation so the new skill and hooks are loaded.
+
+The `personal` marketplace name is local configuration, not a shared registry.
+Other users should install the plugin from whichever marketplace contains their
+copy of this repository and substitute that marketplace name in the command.
 
 To review hook trust explicitly, launch the Codex CLI and enter `/hooks`:
 
@@ -382,7 +390,8 @@ normal terminal and from installed hooks. Hook telemetry uses Codex's writable
 commands automatically discover and merge both locations, including Codex
 plugin-data directories under `CODEX_HOME`, so hook activity appears in the
 normal `shunt stats` view. An explicit `CODEX_SHUNT_DATA_DIR` intentionally
-limits reporting to that one store.
+limits reporting to that one store. Reporting commands open telemetry
+read-only, so they do not require write access to the hook's active store.
 
 | Key | Default | When and why to change it | Example |
 | --- | --- | --- | --- |
@@ -511,7 +520,8 @@ Latency      22.17s average
 shunt report --since 30d
 ```
 
-The default report is written under the data directory. Choose another path:
+The default report is written under the active data directory. Choose another
+path explicitly when needed:
 
 ```bash
 shunt report \
@@ -543,6 +553,10 @@ shunt feedback RUN_ID rejected \
   --note "Missed the dynamically registered handler"
 ```
 
+Feedback is written to the active data directory. If the run came from a hook
+that uses a separate `PLUGIN_DATA` directory, run feedback in that same plugin
+runtime or set `CODEX_SHUNT_DATA_DIR` to that directory for the command.
+
 ### Print the data directory
 
 ```bash
@@ -554,6 +568,9 @@ The default is:
 ```text
 $HOME/.local/share/codex-shunt
 ```
+
+This is the active write directory. Reporting commands may also read the
+Codex plugin-data stores discovered under `CODEX_HOME`.
 
 Override it for a command, project, or test:
 
