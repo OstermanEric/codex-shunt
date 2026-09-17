@@ -1,0 +1,21 @@
+{
+  "name": "codex-shunt",
+  "interface": {
+    "displayName": "Codex Shunt"
+  },
+  "plugins": [
+    {
+      "name": "codex-shunt",
+      "source": {
+        "source": "url",
+        "url": "https://github.com/OstermanEric/codex-shunt",
+        "ref": "main"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

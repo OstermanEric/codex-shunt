@@ -44,11 +44,11 @@ shunt config set strict_routing true
 For direct use from an ordinary Terminal, the source checkout includes an
 optional command installer:
 
-The examples use `$HOME/plugins/codex-shunt` as the checkout path. Replace it
+The examples use `$HOME/.codex/plugins/codex-shunt` as the checkout path. Replace it
 with the actual location of this repository if it lives elsewhere.
 
 ```bash
-"$HOME/plugins/codex-shunt/scripts/install-command"
+"$HOME/.codex/plugins/codex-shunt/scripts/install-command"
 ```
 
 It creates `~/.local/bin/shunt` without modifying shell startup files. The
@@ -225,35 +225,57 @@ Authentication and source authorization are separate checks. A valid ChatGPT
 login establishes how the worker is billed; `shunt setup` records that you
 understand selected file contents are sent to a separate Codex model invocation.
 
-## Install from a marketplace
+## Install from the public repository
 
-This development checkout is registered in the default personal marketplace on
-the maintainer's machine at:
-
-```text
-$HOME/.agents/plugins/marketplace.json
-```
-
-If your configured marketplace points to this checkout, install it with:
+The repository includes a Git-backed marketplace manifest at
+`.agents/plugins/marketplace.json`. On macOS, Linux, or WSL, this single
+copy-paste command registers the public repository, installs the plugin, and
+installs the `shunt` command:
 
 ```bash
-codex plugin add codex-shunt@personal
+git clone --depth 1 https://github.com/OstermanEric/codex-shunt.git "$HOME/.codex/plugins/codex-shunt" && \
+codex plugin marketplace add "$HOME/.codex/plugins/codex-shunt" && \
+codex plugin add codex-shunt@codex-shunt && \
+"$HOME/.codex/plugins/codex-shunt/scripts/install-command"
 ```
 
-If `codex` is not on `PATH`, use the desktop-bundled executable:
+Then run the guided setup and start a new Codex task:
 
 ```bash
-"/Applications/ChatGPT.app/Contents/Resources/codex" \
-  plugin add codex-shunt@personal
+shunt setup
+```
+
+For an end-to-end worker test and automatic routing:
+
+```bash
+shunt setup --test-worker --enable-strict-routing
 ```
 
 Review the plugin's hook definition when Codex asks whether to trust it. Plugin
 installation does not automatically trust hook scripts. Start a **new Codex
 task** after installation so the new skill and hooks are loaded.
 
-The `personal` marketplace name is local configuration, not a shared registry.
-Other users should install the plugin from whichever marketplace contains their
-copy of this repository and substitute that marketplace name in the command.
+If `codex` is not on `PATH`, replace `codex` in the command with the
+desktop-bundled executable:
+
+```bash
+"/Applications/ChatGPT.app/Contents/Resources/codex" \
+  plugin marketplace add "$HOME/.codex/plugins/codex-shunt"
+```
+
+Then run the corresponding `plugin add` command with that executable and run
+the checkout's `scripts/install-command` as shown above.
+
+### Maintainer and local-development install
+
+The development checkout is also registered in the maintainer's default
+personal marketplace at `$HOME/.agents/plugins/marketplace.json`. That local
+marketplace is not shared with other users. To reinstall from it after local
+changes, use:
+
+```bash
+codex plugin add codex-shunt@personal
+```
 
 To review hook trust explicitly, launch the Codex CLI and enter `/hooks`:
 
@@ -271,7 +293,7 @@ The documented command name is `shunt`. The installer creates a symlink in
 use `PATH`:
 
 ```bash
-"$HOME/plugins/codex-shunt/scripts/install-command"
+"$HOME/.codex/plugins/codex-shunt/scripts/install-command"
 command -v shunt
 shunt --version
 ```
@@ -280,21 +302,21 @@ Set `CODEX_SHUNT_BIN_DIR` to install somewhere other than `~/.local/bin`:
 
 ```bash
 CODEX_SHUNT_BIN_DIR="$HOME/bin" \
-  "$HOME/plugins/codex-shunt/scripts/install-command"
+  "$HOME/.codex/plugins/codex-shunt/scripts/install-command"
 ```
 
 To upgrade the command after changing or updating the source, rerun the
 installer. To remove only the symlink managed by this checkout:
 
 ```bash
-"$HOME/plugins/codex-shunt/scripts/install-command" --uninstall
+"$HOME/.codex/plugins/codex-shunt/scripts/install-command" --uninstall
 ```
 
 To reinstall after changing the source, use the plugin-creator cachebuster flow:
 
 ```bash
 python3 "$HOME/.codex/skills/.system/plugin-creator/scripts/update_plugin_cachebuster.py" \
-  "$HOME/plugins/codex-shunt"
+  "$HOME/.codex/plugins/codex-shunt"
 "/Applications/ChatGPT.app/Contents/Resources/codex" \
   plugin add codex-shunt@personal
 ```
@@ -695,7 +717,7 @@ Run the local test suite:
 
 ```bash
 python3 -m unittest discover \
-  -s "$HOME/plugins/codex-shunt/tests" \
+  -s "$HOME/.codex/plugins/codex-shunt/tests" \
   -p 'test_*.py' \
   -v
 ```
@@ -750,14 +772,14 @@ task, and review `/hooks` trust in the Codex CLI.
 
 ```bash
 python3 "$HOME/.codex/skills/.system/skill-creator/scripts/quick_validate.py" \
-  "$HOME/plugins/codex-shunt/skills/shunt"
+  "$HOME/.codex/plugins/codex-shunt/skills/shunt"
 
 python3 "$HOME/.codex/skills/.system/plugin-creator/scripts/validate_plugin.py" \
-  "$HOME/plugins/codex-shunt"
+  "$HOME/.codex/plugins/codex-shunt"
 
 python3 -m compileall -q \
-  "$HOME/plugins/codex-shunt/src" \
-  "$HOME/plugins/codex-shunt/scripts/codex-shunt"
+  "$HOME/.codex/plugins/codex-shunt/src" \
+  "$HOME/.codex/plugins/codex-shunt/scripts/codex-shunt"
 ```
 
 ## Remove the plugin

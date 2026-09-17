@@ -14,6 +14,18 @@ PLUGIN_ROOT = Path(__file__).resolve().parents[1]
 
 
 class PackagedPluginTests(unittest.TestCase):
+    def test_public_marketplace_manifest_points_to_github_plugin(self) -> None:
+        marketplace_path = PLUGIN_ROOT / ".agents" / "plugins" / "marketplace.json"
+        payload = json.loads(marketplace_path.read_text(encoding="utf-8"))
+        self.assertEqual(payload["name"], "codex-shunt")
+        self.assertEqual(payload["plugins"][0]["name"], "codex-shunt")
+        self.assertEqual(payload["plugins"][0]["source"]["source"], "url")
+        self.assertEqual(
+            payload["plugins"][0]["source"]["url"],
+            "https://github.com/OstermanEric/codex-shunt",
+        )
+        self.assertEqual(payload["plugins"][0]["source"]["ref"], "main")
+
     def _copy_to_fresh_cache(self, temporary: str) -> Path:
         cache_root = (
             Path(temporary)
