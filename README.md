@@ -2,7 +2,7 @@
 
 Codex Shunt is a local Codex plugin that keeps judgment-heavy work in the
 primary model while routing large, predictable repository analysis to a
-subscription-authenticated GPT-5.6 Luna worker. It records content-free local
+subscription-authenticated GPT-6 Luna worker. It records content-free local
 telemetry so you can measure how often routing happens, the worker tokens and
 credits consumed, estimated primary-context avoided, latency, citation quality,
 and fallback behavior.
@@ -67,7 +67,7 @@ Version 0.1.0 implements:
 - a packaged Codex skill and `PreToolUse` / `PostToolUse` hooks;
 - a simple `strict_routing` switch that is off by default;
 - direct strict-hook routing through the bundled worker, with fail-open fallback;
-- an isolated read-only GPT-5.6 Luna worker;
+- an isolated read-only GPT-6 Luna worker (with GPT-5.6 Luna still selectable);
 - explicit repository inspection and log summarization commands;
 - SQLite telemetry with stats, JSON, CSV, and HTML reporting;
 - citation validation, sensitive-file filtering, size limits, and bypasses;
@@ -116,7 +116,7 @@ flowchart TD
    generated paths, and copies the selected files into an isolated temporary
    workspace.
 4. A fresh `codex exec --json --ephemeral --skip-git-repo-check` process runs
-   GPT-5.6 Luna with a read-only sandbox and a strict JSON output schema. The
+   GPT-6 Luna with a read-only sandbox and a strict JSON output schema. The
    skip flag is required because the isolated temporary workspace is
    intentionally not a Git checkout.
 5. Codex Shunt validates returned file paths and line ranges, stores token usage
@@ -154,7 +154,7 @@ skill and hooks are loaded.
 - A Codex executable available on `PATH`, installed at `~/.local/bin/codex`,
   or bundled with the Codex/ChatGPT desktop app
 - Python 3.11 or newer
-- A ChatGPT plan with Codex and GPT-5.6 Luna access
+- A ChatGPT plan with Codex and GPT-6 Luna access
 - Local filesystem access to the repository being inspected
 
 The implementation uses only the Python standard library. It has no package
@@ -419,7 +419,7 @@ read-only, so they do not require write access to the hook's active store.
 | --- | --- | --- | --- |
 | `strict_routing` | `false` | Set true to route qualifying reads directly through Luna | `shunt config set strict_routing true` |
 | `source_sharing_acknowledged` | `false` | Set only by the guided disclosure; set false to revoke and disable strict routing | `shunt setup` |
-| `worker_model` | `gpt-5.6-luna` | Keep Luna for low-credit bulk work; change only for controlled comparisons | `shunt config set worker_model gpt-5.6-terra` |
+| `worker_model` | `gpt-6-luna` | Keep Luna for low-credit bulk work; change only for controlled comparisons | `shunt config set worker_model gpt-5.6-luna` |
 | `reasoning_effort` | `low` | Raise for harder classification, accepting more latency and usage | `shunt config set reasoning_effort medium` |
 | `min_file_lines` | `500` | Raise to route fewer reads; lower to route more | `shunt config set min_file_lines 800` |
 | `min_source_bytes` | `100000` | Adjust the byte-size alternative to the line threshold | `shunt config set min_source_bytes 200000` |
@@ -435,7 +435,7 @@ Restore the recommended conservative configuration:
 
 ```bash
 shunt config set strict_routing false
-shunt config set worker_model gpt-5.6-luna
+shunt config set worker_model gpt-6-luna
 shunt config set reasoning_effort low
 shunt config set min_file_lines 500
 shunt config set min_source_bytes 100000
@@ -610,7 +610,7 @@ Codex Shunt stores:
 - selected file, byte, and line counts;
 - estimated source tokens intercepted, calculated as bytes divided by four;
 - exact worker input, cached-input, output, and reasoning token counts;
-- exact worker credits using the bundled GPT-5.6 Luna rate snapshot;
+- exact worker credits using the bundled rate snapshot for the selected worker model;
 - an estimated Sol-equivalent counterfactual for the same worker tokens;
 - duration, status, worker escalation, and citation-validation counts;
 - optional accepted/rejected feedback.
@@ -645,11 +645,12 @@ The bundled rate snapshot is:
 
 | Model | Input / 1M | Cached input / 1M | Output / 1M |
 | --- | ---: | ---: | ---: |
+| GPT-6 Luna | 2.5 credits | 0.25 credits | 12.5 credits |
 | GPT-5.6 Luna | 5 credits | 0.5 credits | 30 credits |
 | GPT-5.6 Sol counterfactual | 100 credits | 10 credits | 500 credits |
 
-Update `LUNA_RATES` and `SOL_RATES` in `src/codex_shunt/worker.py` if the
-published subscription rate card changes.
+Update the model entries in `MODEL_RATES` and `SOL_RATES` in
+`src/codex_shunt/worker.py` if the rate snapshot changes.
 
 ## Post-tool output compression
 

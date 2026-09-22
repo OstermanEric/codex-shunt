@@ -1,6 +1,6 @@
 ---
 name: shunt
-description: Route large, predictable, read-heavy repository work or oversized test/build output to a subscription-authenticated GPT-5.6 Luna worker, then verify its focused citations with the primary model. Use when the user invokes Codex Shunt, asks for bulk repository inspection, inventory, classification, extraction, summarization, log triage, token-routing metrics, or when a Codex Shunt hook redirects a large read.
+description: Route large, predictable, read-heavy repository work or oversized test/build output to a subscription-authenticated GPT-6 Luna worker, then verify its focused citations with the primary model. Use when the user invokes Codex Shunt, asks for bulk repository inspection, inventory, classification, extraction, summarization, log triage, token-routing metrics, or when a Codex Shunt hook redirects a large read.
 ---
 
 # Codex Shunt

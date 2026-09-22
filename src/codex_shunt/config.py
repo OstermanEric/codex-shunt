@@ -17,7 +17,7 @@ DEFAULT_CONFIG_PATH = PLUGIN_ROOT / "config" / "defaults.toml"
 ALLOWED_LEGACY_MODES = {"off", "shadow", "enforce"}
 
 SOURCE_SHARING_NOTICE = """Codex Shunt sends the contents of selected eligible text files to a
-separate GPT-5.6 Luna Codex invocation using your existing ChatGPT/Codex login.
+separate GPT-6 Luna Codex invocation using your existing ChatGPT/Codex login.
 No API key is used, but the worker consumes your subscription allowance or credits.
 Common secret-bearing paths and generated files are excluded, and the worker is
 ephemeral and read-only. Filtering is not a guarantee: do not select credentials,

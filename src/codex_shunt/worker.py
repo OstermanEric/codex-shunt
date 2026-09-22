@@ -21,9 +21,11 @@ from .sources import SourceSelection, collect_sources, copy_to_workspace
 
 
 LUNA_RATES = {"input": 5.0, "cached": 0.5, "output": 30.0}
+GPT6_LUNA_RATES = {"input": 2.5, "cached": 0.25, "output": 12.5}
 SOL_RATES = {"input": 100.0, "cached": 10.0, "output": 500.0}
 MODEL_RATES = {
     "gpt-6-astra": {"input": 250.0, "cached": 25.0, "output": 1250.0},
+    "gpt-6-luna": GPT6_LUNA_RATES,
     "gpt-5.6-sol": SOL_RATES,
     "gpt-5.6-terra": {"input": 50.0, "cached": 5.0, "output": 300.0},
     "gpt-5.6-luna": LUNA_RATES,

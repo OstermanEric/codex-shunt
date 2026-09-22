@@ -1,6 +1,6 @@
 strict_routing = false
 source_sharing_acknowledged = false
-worker_model = "gpt-5.6-luna"
+worker_model = "gpt-6-luna"
 reasoning_effort = "low"
 min_file_lines = 500
 min_source_bytes = 100000

@@ -36,7 +36,7 @@ class SetupTests(unittest.TestCase):
         ):
             status = command_setup(self._args())
         self.assertEqual(status, 2)
-        self.assertIn("separate GPT-5.6 Luna Codex invocation", output.getvalue())
+        self.assertIn("separate GPT-6 Luna Codex invocation", output.getvalue())
         self.assertIn("No configuration was changed", errors.getvalue())
 
     def test_setup_records_consent_tests_worker_then_enables_strict_routing(self) -> None:
