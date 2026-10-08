@@ -14,6 +14,26 @@ from codex_shunt.config import get_data_dir, load_config, save_user_config
 
 
 class ConfigTests(unittest.TestCase):
+    def test_strict_routing_defaults_on_and_preserves_saved_opt_out(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary, patch.dict(
+            os.environ, {"CODEX_SHUNT_DATA_DIR": temporary}, clear=True
+        ):
+            config = load_config()
+            self.assertTrue(config["strict_routing"])
+            self.assertFalse(config["source_sharing_acknowledged"])
+            config["strict_routing"] = False
+            save_user_config(config)
+            self.assertFalse(load_config()["strict_routing"])
+
+    def test_legacy_off_and_shadow_preserve_opt_out(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary, patch.dict(
+            os.environ, {"CODEX_SHUNT_DATA_DIR": temporary}, clear=True
+        ):
+            for mode in ("off", "shadow"):
+                with self.subTest(mode=mode):
+                    (Path(temporary) / "config.toml").write_text(f'mode = "{mode}"\n')
+                    self.assertFalse(load_config()["strict_routing"])
+
     def test_comparison_default_persists_and_rejects_unknown_models(self) -> None:
         with tempfile.TemporaryDirectory() as temporary, patch.dict(
             os.environ, {"CODEX_SHUNT_DATA_DIR": temporary}, clear=False

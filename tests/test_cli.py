@@ -69,6 +69,21 @@ class SetupTests(unittest.TestCase):
             worker.assert_called_once()
             self.assertIn("enabled after successful worker verification", output.getvalue())
 
+    def test_failed_setup_disables_default_routing_before_worker_verification(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            environment = {"CODEX_SHUNT_DATA_DIR": temporary}
+            checks = [{"name": "runtime", "ok": False, "detail": "unavailable"}]
+            with patch.dict(os.environ, environment, clear=True), patch(
+                "codex_shunt.cli._doctor_checks", return_value=checks
+            ), patch("codex_shunt.cli.run_worker") as worker, redirect_stdout(io.StringIO()):
+                self.assertTrue(load_config()["strict_routing"])
+                status = command_setup(build_parser().parse_args(["setup", "--accept-source-sharing"]))
+                config = load_config()
+            self.assertEqual(status, 1)
+            self.assertTrue(config["source_sharing_acknowledged"])
+            self.assertFalse(config["strict_routing"])
+            worker.assert_not_called()
+
 
 
 

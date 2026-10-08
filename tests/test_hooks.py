@@ -49,7 +49,7 @@ class PreHookTests(unittest.TestCase):
                 self.assertEqual(output.getvalue(), "")
                 self.assertEqual(aggregate("all")["routing"]["observed"], 1)
 
-    def test_strict_mode_routes_large_read_and_denies_original(self) -> None:
+    def test_default_strict_mode_routes_large_read_after_acknowledgement(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             source = root / "large.txt"
@@ -59,7 +59,6 @@ class PreHookTests(unittest.TestCase):
             output = io.StringIO()
             environment = {
                 "CODEX_SHUNT_DATA_DIR": str(root / "data"),
-                "CODEX_SHUNT_STRICT_ROUTING": "true",
                 "CODEX_SHUNT_SOURCE_SHARING_ACKNOWLEDGED": "true",
             }
             outcome = SimpleNamespace(
@@ -79,7 +78,7 @@ class PreHookTests(unittest.TestCase):
                     "limitations": [],
                 },
             )
-            with patch.dict(os.environ, environment, clear=False), patch(
+            with patch.dict(os.environ, environment, clear=True), patch(
                 "sys.stdin", io.StringIO(json.dumps(event))
             ), patch(
                 "codex_shunt.hooks.run_worker", return_value=outcome
@@ -93,7 +92,7 @@ class PreHookTests(unittest.TestCase):
             self.assertEqual(worker.call_count, 1)
             self.assertEqual(worker.call_args.kwargs["task_kind"], "hook-routed-read")
 
-    def test_strict_mode_fails_open_without_source_sharing_acknowledgement(self) -> None:
+    def test_default_strict_mode_fails_open_without_source_sharing_acknowledgement(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             source = root / "large.txt"
@@ -102,10 +101,8 @@ class PreHookTests(unittest.TestCase):
             output = io.StringIO()
             environment = {
                 "CODEX_SHUNT_DATA_DIR": str(root / "data"),
-                "CODEX_SHUNT_STRICT_ROUTING": "true",
-                "CODEX_SHUNT_SOURCE_SHARING_ACKNOWLEDGED": "false",
             }
-            with patch.dict(os.environ, environment, clear=False), patch(
+            with patch.dict(os.environ, environment, clear=True), patch(
                 "sys.stdin", io.StringIO(json.dumps(event))
             ), patch("codex_shunt.hooks.run_worker") as worker, redirect_stdout(output):
                 self.assertEqual(hook_pre(), 0)

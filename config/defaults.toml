@@ -1,4 +1,4 @@
-strict_routing = false
+strict_routing = true
 source_sharing_acknowledged = false
 worker_model = "gpt-6-luna"
 comparison_model = "gpt-6.1-sol"

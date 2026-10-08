@@ -106,8 +106,12 @@ Routing triggers at **500 or more requested lines OR 100,000 or more requested
 bytes**, by default. Thresholds apply to the supported read's text, including
 bounded ranges, rather than the entire file behind every request.
 
-Fresh installs leave routing off until setup. Use `shunt config set strict_routing
-false` to disable it. Configuration also exposes source-sharing acknowledgement,
+Strict routing defaults to **true**. Fresh installs still require source-sharing
+acknowledgement through setup before a worker can run. Setup temporarily disables
+routing while verifying Luna, then enables it after success. Existing saved
+`strict_routing = false` settings are preserved. After setup, enable routing with
+`shunt config set strict_routing true` or disable it with
+`shunt config set strict_routing false`. Configuration also exposes source-sharing acknowledgement,
 reasoning effort, and maximum source-file, source-byte, and result-size limits.
 Retired compression/retention settings in older files are ignored.
 

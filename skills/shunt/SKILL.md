@@ -52,7 +52,10 @@ text files into an isolated temporary workspace before starting Luna.
 
 ## Strict routing
 
-Strict routing is off by default. When it is on, the bundled `PreToolUse` hook
+Strict routing defaults to true; source-sharing acknowledgement is still required
+before a worker can run. Explicit saved false settings are preserved. Setup
+temporarily disables routing while verifying Luna, then enables it after success.
+When routing is on, the bundled `PreToolUse` hook
 runs the same filtered, read-only Luna worker itself and returns its compact
 result before denying the original broad read. It must fail open: if the runner,
 configuration, authentication, or worker fails, or its evidence is invalid or
