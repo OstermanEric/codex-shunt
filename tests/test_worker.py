@@ -11,14 +11,13 @@ PLUGIN_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PLUGIN_ROOT / "src"))
 
 from codex_shunt.worker import (
-    LUNA_RATES,
-    SOL_RATES,
     _with_outer_sandbox_hint,
     credits_for,
     ensure_source_sharing_acknowledged,
     find_codex,
     parse_usage,
 )
+from codex_shunt.pricing import MODEL_RATES
 
 
 class WorkerUsageTests(unittest.TestCase):
@@ -50,6 +49,15 @@ class WorkerUsageTests(unittest.TestCase):
         self.assertEqual(usage["output_tokens"], 90_000)
         self.assertEqual(usage["reasoning_output_tokens"], 10_000)
 
+    def test_prefers_current_desktop_runtime_over_standalone(self) -> None:
+        bundled = "/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex"
+        with patch.dict(environ, {}, clear=True), \
+                patch("codex_shunt.worker.shutil.which", return_value="/old/codex"), \
+                patch.object(Path, "is_file", autospec=True,
+                             side_effect=lambda path: str(path) in (bundled, "/old/codex")), \
+                patch("codex_shunt.worker.os.access", return_value=True):
+            self.assertEqual(find_codex(), bundled)
+
     def test_calculates_luna_and_sol_counterfactual(self) -> None:
         usage = {
             "input_tokens": 1_200_000,
@@ -57,8 +65,8 @@ class WorkerUsageTests(unittest.TestCase):
             "output_tokens": 90_000,
             "reasoning_output_tokens": 10_000,
         }
-        self.assertAlmostEqual(credits_for(usage, LUNA_RATES), 7.8)
-        self.assertAlmostEqual(credits_for(usage, SOL_RATES), 147.0)
+        self.assertAlmostEqual(credits_for(usage, MODEL_RATES["gpt-6-luna"]), 3.675)
+        self.assertAlmostEqual(credits_for(usage, MODEL_RATES["gpt-6.1-sol"]), 73.0)
 
     def test_nested_codex_failure_explains_scoped_outer_approval(self) -> None:
         detail = _with_outer_sandbox_hint(

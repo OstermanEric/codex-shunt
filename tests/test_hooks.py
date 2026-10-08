@@ -15,7 +15,7 @@ PLUGIN_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PLUGIN_ROOT / "src"))
 
 from codex_shunt.db import aggregate
-from codex_shunt.hooks import hook_post, hook_pre
+from codex_shunt.hooks import hook_pre
 
 
 class PreHookTests(unittest.TestCase):
@@ -47,7 +47,7 @@ class PreHookTests(unittest.TestCase):
             ), redirect_stdout(output):
                 self.assertEqual(hook_pre(), 0)
                 self.assertEqual(output.getvalue(), "")
-                self.assertEqual(aggregate("all")["routing"]["routed"], 1)
+                self.assertEqual(aggregate("all")["routing"]["observed"], 1)
 
     def test_strict_mode_routes_large_read_and_denies_original(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -64,6 +64,8 @@ class PreHookTests(unittest.TestCase):
             }
             outcome = SimpleNamespace(
                 run_id="run-routed",
+                citation_count=1,
+                valid_citation_count=1,
                 result={
                     "summary": "Compact worker summary.",
                     "findings": [
@@ -130,7 +132,7 @@ class PreHookTests(unittest.TestCase):
                 self.assertEqual(hook_pre(), 0)
                 summary = aggregate("all")["routing"]
             self.assertEqual(output.getvalue(), "")
-            self.assertEqual(summary["enforced"], 0)
+            self.assertEqual(summary["routed"], 0)
 
     def test_strict_mode_allows_targeted_range_from_large_file(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -152,59 +154,7 @@ class PreHookTests(unittest.TestCase):
             self.assertEqual(output.getvalue(), "")
             worker.assert_not_called()
 
-    def test_strict_off_post_hook_records_without_replacing_output(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            event = {
-                "session_id": "session-test",
-                "turn_id": "turn-test",
-                "cwd": str(root),
-                "hook_event_name": "PostToolUse",
-                "tool_name": "Bash",
-                "tool_input": {"command": "pnpm test"},
-                "tool_response": "failure line\n" * 10000,
-                "model": "gpt-5.6-sol",
-            }
-            output = io.StringIO()
-            environment = {
-                "CODEX_SHUNT_DATA_DIR": str(root / "data"),
-                "CODEX_SHUNT_STRICT_ROUTING": "false",
-            }
-            with patch.dict(os.environ, environment, clear=False), patch(
-                "sys.stdin", io.StringIO(json.dumps(event))
-            ), redirect_stdout(output):
-                self.assertEqual(hook_post(), 0)
-                self.assertEqual(output.getvalue(), "")
-                summary = aggregate("all")["routing"]
-                self.assertEqual(summary["total"], 1)
-                self.assertEqual(summary["routed"], 1)
 
-    def test_post_hook_recognizes_exec_command_cmd_input(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            event = {
-                "session_id": "session-test",
-                "turn_id": "turn-test",
-                "cwd": str(root),
-                "hook_event_name": "PostToolUse",
-                "tool_name": "Bash",
-                "tool_input": {"cmd": "rtk pnpm test"},
-                "tool_response": "failure line\n" * 10000,
-                "model": "gpt-5.6-sol",
-            }
-            output = io.StringIO()
-            environment = {
-                "CODEX_SHUNT_DATA_DIR": str(root / "data"),
-                "CODEX_SHUNT_STRICT_ROUTING": "false",
-            }
-            with patch.dict(os.environ, environment, clear=False), patch(
-                "sys.stdin", io.StringIO(json.dumps(event))
-            ), redirect_stdout(output):
-                self.assertEqual(hook_post(), 0)
-                self.assertEqual(output.getvalue(), "")
-                summary = aggregate("all")["routing"]
-                self.assertEqual(summary["total"], 1)
-                self.assertEqual(summary["routed"], 1)
 
 
 if __name__ == "__main__":

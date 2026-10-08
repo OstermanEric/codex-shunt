@@ -1,6 +1,6 @@
 ---
 name: shunt
-description: Route large, predictable, read-heavy repository work or oversized test/build output to a subscription-authenticated GPT-6 Luna worker, then verify its focused citations with the primary model. Use when the user invokes Codex Shunt, asks for bulk repository inspection, inventory, classification, extraction, summarization, log triage, token-routing metrics, or when a Codex Shunt hook redirects a large read.
+description: Route large, predictable repository reads to a subscription-authenticated GPT-6 Luna worker, then verify focused citations with the primary model. Use for Codex Shunt, bulk repository inspection, inventory, classification, extraction, summarization, routing statistics, or a Shunt hook redirect.
 ---
 
 # Codex Shunt
@@ -55,8 +55,9 @@ text files into an isolated temporary workspace before starting Luna.
 Strict routing is off by default. When it is on, the bundled `PreToolUse` hook
 runs the same filtered, read-only Luna worker itself and returns its compact
 result before denying the original broad read. It must fail open: if the runner,
-configuration, telemetry, authentication, or worker fails, allow the original
-tool call.
+configuration, authentication, or worker fails, or its evidence is invalid or
+needs escalation, allow the original tool call. Telemetry failure alone does
+not prevent a valid result. Unsupported shell commands also run normally.
 
 The hook accepts both the legacy Bash `tool_input.command` field and the
 `tool_input.cmd` field used by current code-mode `exec_command` calls. Codex
@@ -74,10 +75,10 @@ first-time setup, prefer:
 
 ```bash
 "<resolved-plugin-root>/scripts/codex-shunt" setup \
-  --accept-source-sharing --enable-strict-routing
+  --accept-source-sharing
 ```
 
-`--enable-strict-routing` first sends a synthetic two-line fixture through Luna
+Setup first sends a synthetic two-line fixture through Luna
 and persists strict mode only if that end-to-end check succeeds.
 
 Do not ask the user to clear plugin caches. A legacy `mode = "enforce"` setting
@@ -87,8 +88,8 @@ is migrated automatically.
 
 When invoking the runner through a local Codex task's shell, request narrowly
 scoped elevated/unsandboxed execution for the Shunt command on the first call.
-Use a reusable prefix limited to the resolved runner plus its `inspect` or
-`summarize-log` subcommand when the host supports persistent approvals. The
+Use a reusable prefix limited to the resolved runner plus its `inspect`
+subcommand when the host supports persistent approvals. The
 outer permission is required because a nested `codex exec` must access Codex's
 local authentication/runtime services and Shunt's metrics database.
 
@@ -108,24 +109,28 @@ in-sandbox invocation.
 
 ## Metrics
 
-Use the runner for metrics and reports:
+Use the runner for statistics:
 
 ```bash
 "<resolved-plugin-root>/scripts/codex-shunt" stats --since 7d
-"<resolved-plugin-root>/scripts/codex-shunt" report --since 30d
-"<resolved-plugin-root>/scripts/codex-shunt" export --since all --format json
+"<resolved-plugin-root>/scripts/codex-shunt" stats --since all --json
+"<resolved-plugin-root>/scripts/codex-shunt" stats --since 30d --compare-to gpt-6-sol
 ```
 
-Worker token counts are exact. Primary-context tokens avoided and
-Sol-equivalent credits are estimates and must stay labeled as estimates.
-Stats, reports, and exports automatically discover the terminal store and
+Worker token counts are observed; credits and gross source interception are
+estimates. Savings compare successful worker tokens at the configured model's
+standard rates, defaulting to GPT-6.1 Sol; they do not measure account charges or
+end-to-end savings. Setup checks are excluded, and failed/escalated work adds
+cost without comparison savings. Use `config set comparison_model <model>` to
+change the default, or `stats --compare-to <model>` for one report.
+Stats automatically discover the terminal store and
 Codex plugin-data stores; use `CODEX_SHUNT_DATA_DIR` only when intentionally
 scoping a report to one metrics database.
 
 ## Routing boundaries
 
 Good tasks: repository inventories, symbol/call-site collection, extraction,
-classification, large-file summaries, test-log triage, and tightly specified
+classification, large-file summaries, saved test-log triage, and tightly specified
 boilerplate analysis.
 
 Do not route: architecture, security or privacy judgment, ambiguous debugging,

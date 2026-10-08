@@ -1,28 +1,15 @@
 {
-  "description": "Route large reads through Codex Shunt and optionally compress oversized command output.",
+  "description": "Route supported large read-only shell commands through Codex Shunt.",
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "^(Bash|mcp__.*(read|search|fetch).*)$",
+        "matcher": "^Bash$",
         "hooks": [
           {
             "type": "command",
             "command": "\"$PLUGIN_ROOT/scripts/codex-shunt-hook\" pre",
             "timeout": 180,
             "statusMessage": "Routing large reads through Codex Shunt when strict mode is enabled"
-          }
-        ]
-      }
-    ],
-    "PostToolUse": [
-      {
-        "matcher": "^Bash$",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"$PLUGIN_ROOT/scripts/codex-shunt-hook\" post",
-            "timeout": 180,
-            "statusMessage": "Checking oversized command output"
           }
         ]
       }

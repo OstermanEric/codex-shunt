@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import os
+import json
 from pathlib import Path
 from typing import Any
+
+from .pricing import MODEL_RATES
 
 try:
     import tomllib
@@ -61,7 +64,12 @@ def load_config() -> dict[str, Any]:
     if plugin_data and not os.environ.get("CODEX_SHUNT_DATA_DIR"):
         plugin_config = _read_toml(Path(plugin_data).expanduser().resolve() / "config.toml")
     user_config = {**plugin_config, **_read_toml(user_config_path())}
-    config.update(user_config)
+    # Ignore retired compression/retention keys saved by older installations.
+    retired = {"post_tool_compression", "post_tool_min_bytes", "retain_raw_worker_events", "mode"}
+    unknown = set(user_config) - set(config) - retired
+    if unknown:
+        raise ValueError(f"Unknown configuration keys: {', '.join(sorted(unknown))}")
+    config.update({key: value for key, value in user_config.items() if key in config})
 
     # Migrate the original tri-state setting without requiring users to edit or
     # delete their preserved plugin data after an update.
@@ -104,18 +112,16 @@ def validate_config(config: dict[str, Any]) -> None:
         "max_source_files",
         "max_source_bytes",
         "max_output_chars",
-        "post_tool_min_bytes",
         "worker_timeout_seconds",
     ):
         value = config.get(key)
         if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
             raise ValueError(f"{key} must be a positive integer")
-    for key in ("post_tool_compression", "retain_raw_worker_events"):
-        if not isinstance(config.get(key), bool):
-            raise ValueError(f"{key} must be true or false")
-    for key in ("worker_model", "reasoning_effort"):
-        if not isinstance(config.get(key), str) or not config[key].strip():
-            raise ValueError(f"{key} must be a non-empty string")
+    for key in ("worker_model", "comparison_model"):
+        if not isinstance(config.get(key), str) or config[key] not in MODEL_RATES:
+            raise ValueError(f"{key} must be one of: {', '.join(MODEL_RATES)}")
+    if config.get("reasoning_effort") not in {"low", "medium", "high", "xhigh", "max"}:
+        raise ValueError("reasoning_effort must be low, medium, high, xhigh, or max")
 
 
 def _toml_value(value: Any) -> str:
@@ -124,8 +130,7 @@ def _toml_value(value: Any) -> str:
     if isinstance(value, int):
         return str(value)
     if isinstance(value, str):
-        escaped = value.replace("\\", "\\\\").replace('"', '\\"')
-        return f'"{escaped}"'
+        return json.dumps(value)
     raise TypeError(f"Unsupported configuration value: {value!r}")
 
 

@@ -5,12 +5,14 @@ from __future__ import annotations
 import os
 import sqlite3
 import uuid
+from contextlib import closing
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
 from .config import get_data_dir
+from .pricing import DEFAULT_COMPARISON_MODEL, MODEL_RATES, RATE_DATE, credits_for
 
 
 SCHEMA = """
@@ -64,14 +66,6 @@ CREATE TABLE IF NOT EXISTS worker_runs (
 CREATE INDEX IF NOT EXISTS idx_worker_created ON worker_runs(created_at);
 CREATE INDEX IF NOT EXISTS idx_worker_model ON worker_runs(worker_model);
 
-CREATE TABLE IF NOT EXISTS feedback (
-    id TEXT PRIMARY KEY,
-    created_at TEXT NOT NULL,
-    run_id TEXT NOT NULL,
-    verdict TEXT NOT NULL,
-    note TEXT,
-    FOREIGN KEY(run_id) REFERENCES worker_runs(id)
-);
 """
 
 
@@ -152,7 +146,7 @@ def _connect_readonly(data_dir: Path) -> sqlite3.Connection | None:
                 "SELECT name FROM sqlite_master WHERE type = 'table'"
             ).fetchall()
         }
-        if not {"routing_events", "worker_runs", "feedback"}.issubset(tables):
+        if not {"routing_events", "worker_runs"}.issubset(tables):
             connection.close()
             return None
         return connection
@@ -178,7 +172,7 @@ def record_routing_event(**values: Any) -> str:
     }
     if values:
         raise TypeError(f"Unknown routing fields: {', '.join(values)}")
-    with connect() as connection:
+    with closing(connect()) as connection, connection:
         connection.execute(
             """INSERT INTO routing_events
             (id, created_at, session_id, turn_id, parent_model, tool_name,
@@ -225,26 +219,13 @@ def record_worker_run(values: dict[str, Any]) -> str:
     }
     columns = ", ".join(row)
     placeholders = ", ".join(f":{key}" for key in row)
-    with connect() as connection:
+    with closing(connect()) as connection, connection:
         connection.execute(
             f"INSERT INTO worker_runs ({columns}) VALUES ({placeholders})", row
         )
     return run_id
 
 
-def record_feedback(run_id: str, verdict: str, note: str | None) -> str:
-    feedback_id = str(uuid.uuid4())
-    with connect() as connection:
-        exists = connection.execute(
-            "SELECT 1 FROM worker_runs WHERE id = ?", (run_id,)
-        ).fetchone()
-        if not exists:
-            raise ValueError(f"Unknown worker run: {run_id}")
-        connection.execute(
-            "INSERT INTO feedback (id, created_at, run_id, verdict, note) VALUES (?, ?, ?, ?, ?)",
-            (feedback_id, utc_now(), run_id, verdict, note),
-        )
-    return feedback_id
 
 
 def since_timestamp(raw: str) -> str | None:
@@ -267,7 +248,7 @@ def since_timestamp(raw: str) -> str | None:
 
 
 def fetch_rows(table: str, since: str) -> list[dict[str, Any]]:
-    if table not in {"routing_events", "worker_runs", "feedback"}:
+    if table not in {"routing_events", "worker_runs"}:
         raise ValueError(f"Unsupported table: {table}")
     start = since_timestamp(since)
     query = f"SELECT * FROM {table}"
@@ -292,83 +273,53 @@ def fetch_rows(table: str, since: str) -> list[dict[str, Any]]:
     return sorted(rows_by_id.values(), key=lambda row: row["created_at"], reverse=True)
 
 
-def aggregate(since: str) -> dict[str, Any]:
+def aggregate(since: str, comparison_model: str = DEFAULT_COMPARISON_MODEL) -> dict[str, Any]:
+    if comparison_model not in MODEL_RATES:
+        raise ValueError(f"Unknown comparison model: {comparison_model}")
     routing_rows = fetch_rows("routing_events", since)
-    worker_rows = fetch_rows("worker_runs", since)
-    feedback_rows = fetch_rows("feedback", since)
-
-    routed_decisions = {"would_route", "deny", "would_compress", "compress"}
-    enforced_decisions = {"deny", "compress"}
+    all_workers = fetch_rows("worker_runs", since)
+    worker_rows = [row for row in all_workers if row["task_kind"] != "setup-smoke"]
+    successful = [row for row in worker_rows if row["status"] == "success"
+                  and not row.get("error_type") and not row.get("needs_escalation")]
+    enforced = [row for row in routing_rows if row["decision"] == "deny"]
     routing = {
-        "total": len(routing_rows),
-        "routed": sum(row["decision"] in routed_decisions for row in routing_rows),
-        "enforced": sum(row["decision"] in enforced_decisions for row in routing_rows),
-        "estimated_tokens": sum(
-            int(row["estimated_source_tokens"] or 0)
-            for row in routing_rows
-            if row["decision"] in routed_decisions
-        ),
-        "estimated_intercepted_tokens": sum(
-            int(row["estimated_source_tokens"] or 0)
-            for row in routing_rows
-            if row["decision"] in enforced_decisions
-        ),
+        "eligible": sum(row["decision"] in {"deny", "would_route", "route_failed"} for row in routing_rows),
+        "routed": len(enforced),
+        "observed": sum(row["decision"] == "would_route" for row in routing_rows),
+        "fallbacks": sum(row["decision"] == "route_failed" for row in routing_rows),
+        "estimated_source_tokens_intercepted": sum(int(row["estimated_source_tokens"] or 0) for row in enforced),
     }
-    worker_total = len(worker_rows)
     workers = {
-        "total": worker_total,
-        "succeeded": sum(row["status"] == "success" for row in worker_rows),
-        "input_tokens": sum(int(row["input_tokens"] or 0) for row in worker_rows),
-        "cached_input_tokens": sum(
-            int(row["cached_input_tokens"] or 0) for row in worker_rows
-        ),
-        "output_tokens": sum(int(row["output_tokens"] or 0) for row in worker_rows),
-        "reasoning_output_tokens": sum(
-            int(row["reasoning_output_tokens"] or 0) for row in worker_rows
-        ),
-        "worker_credits": sum(
-            float(row["actual_worker_credits"] or 0) for row in worker_rows
-        ),
-        "sol_credits": sum(
-            float(row["sol_equivalent_credits"] or 0) for row in worker_rows
-        ),
-        "average_duration_ms": (
-            sum(int(row["duration_ms"] or 0) for row in worker_rows) / worker_total
-            if worker_total
-            else 0
-        ),
+        "total": len(worker_rows), "succeeded": len(successful),
+        "failed": sum(row["status"] == "failed" or bool(row.get("error_type")) for row in worker_rows),
+        "escalations": sum(bool(row.get("needs_escalation")) for row in worker_rows),
+        "average_duration_ms": sum(int(row["duration_ms"] or 0) for row in worker_rows) / len(worker_rows)
+        if worker_rows else 0,
+        "estimated_credits": sum(float(row["actual_worker_credits"] or 0) for row in worker_rows),
         "citations": sum(int(row["citation_count"] or 0) for row in worker_rows),
-        "valid_citations": sum(
-            int(row["valid_citation_count"] or 0) for row in worker_rows
-        ),
-        "escalations": sum(int(row["needs_escalation"] or 0) for row in worker_rows),
+        "valid_citations": sum(int(row["valid_citation_count"] or 0) for row in worker_rows),
     }
+    for key in ("input_tokens", "cached_input_tokens", "output_tokens", "reasoning_output_tokens"):
+        workers[key] = sum(int(row[key] or 0) for row in worker_rows)
+    equivalent = sum(credits_for(row, MODEL_RATES[comparison_model]) for row in successful)
+    savings = equivalent - workers["estimated_credits"]
     models: dict[str, dict[str, Any]] = {}
     for row in worker_rows:
-        model = str(row["worker_model"])
-        summary = models.setdefault(
-            model,
-            {"worker_model": model, "runs": 0, "tokens": 0, "credits": 0.0},
-        )
+        model = row["worker_model"]
+        summary = models.setdefault(model, {"worker_model": model, "runs": 0, "tokens": 0, "estimated_credits": 0.0})
         summary["runs"] += 1
-        summary["tokens"] += sum(
-            int(row[key] or 0)
-            for key in ("input_tokens", "output_tokens", "reasoning_output_tokens")
-        )
-        summary["credits"] += float(row["actual_worker_credits"] or 0)
-    by_model = sorted(models.values(), key=lambda row: row["runs"], reverse=True)
-    feedback_counts: dict[str, int] = {}
-    for row in feedback_rows:
-        verdict = str(row["verdict"])
-        feedback_counts[verdict] = feedback_counts.get(verdict, 0) + 1
-    feedback = [
-        {"verdict": verdict, "count": count}
-        for verdict, count in feedback_counts.items()
-    ]
+        # Reasoning tokens are a subset of output tokens, not an additional charge.
+        summary["tokens"] += int(row["input_tokens"] or 0) + int(row["output_tokens"] or 0)
+        summary["estimated_credits"] += float(row["actual_worker_credits"] or 0)
     return {
-        "since": since,
-        "routing": routing,
-        "workers": workers,
-        "by_model": by_model,
-        "feedback": feedback,
+        "since": since, "routing": routing, "workers": workers,
+        "by_model": sorted(models.values(), key=lambda row: row["runs"], reverse=True),
+        "setup_runs_excluded": len(all_workers) - len(worker_rows),
+        "comparison": {
+            "model": comparison_model, "rate_date": RATE_DATE,
+            "estimated_equivalent_credits": equivalent, "estimated_savings_credits": savings,
+            "estimated_savings_rate": savings / equivalent if equivalent else None,
+            "basis": "Successful worker tokens repriced at standard rates; all real worker costs included. "
+                     "Setup excluded. Not measured account charges or end-to-end savings.",
+        },
     }

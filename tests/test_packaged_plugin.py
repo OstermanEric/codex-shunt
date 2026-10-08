@@ -7,6 +7,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 
@@ -14,6 +15,21 @@ PLUGIN_ROOT = Path(__file__).resolve().parents[1]
 
 
 class PackagedPluginTests(unittest.TestCase):
+    def test_distribution_metadata_assets_and_setup_binding_are_complete(self) -> None:
+        manifest = json.loads((PLUGIN_ROOT / ".codex-plugin/plugin.json").read_text())
+        interface = manifest["interface"]
+        self.assertLessEqual(len(interface["shortDescription"]), 30)
+        self.assertLessEqual(len(interface["defaultPrompt"]), 3)
+        self.assertNotEqual(interface["developerName"], "Local developer")
+        for key in ("logo", "composerIcon"):
+            icon = ET.parse(PLUGIN_ROOT / interface[key]).getroot()
+            self.assertEqual(icon.attrib["width"], icon.attrib["height"])
+            self.assertGreaterEqual(int(icon.attrib["width"]), 48)
+        setup = manifest["extensions"]["com.openai"]["onboardingSkill"]
+        self.assertTrue((PLUGIN_ROOT / setup).is_file())
+        hooks = json.loads((PLUGIN_ROOT / "hooks/hooks.json").read_text())["hooks"]
+        self.assertEqual(set(hooks), {"PreToolUse"})
+
     def test_public_marketplace_manifest_points_to_github_plugin(self) -> None:
         marketplace_path = PLUGIN_ROOT / ".agents" / "plugins" / "marketplace.json"
         payload = json.loads(marketplace_path.read_text(encoding="utf-8"))
@@ -52,12 +68,14 @@ class PackagedPluginTests(unittest.TestCase):
             "    raise SystemExit(0)\n"
             "args = sys.argv[1:]\n"
             "result_path = pathlib.Path(args[args.index('--output-last-message') + 1])\n"
+            "source_name = (result_path.parent / '.codex-shunt-files.txt').read_text().splitlines()[0]\n"
             "result_path.write_text(json.dumps({\n"
             "    'summary': 'Fresh-cache worker result.',\n"
-            "    'findings': [{'claim': 'The fixture has two lines.', "
-            "'file': 'sample.txt', 'line_start': 1, 'line_end': 2, "
+            "    'findings': [{'claim': 'The fixture contains text.', "
+            "'file': source_name, 'line_start': 1, 'line_end': 2, "
             "'confidence': 1.0}],\n"
             "    'limitations': [],\n"
+            "    'recommended_reads': [],\n"
             "    'needs_escalation': False,\n"
             "}), encoding='utf-8')\n"
             "pathlib.Path(os.environ['FAKE_CODEX_LOG']).write_text(json.dumps({\n"

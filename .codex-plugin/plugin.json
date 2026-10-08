@@ -1,16 +1,26 @@
 {
   "name": "codex-shunt",
-  "version": "0.1.0+codex.20260922193423",
+  "version": "0.2.0",
   "description": "Route high-volume, predictable Codex work to a subscription-authenticated Luna worker and measure the result.",
   "author": {
-    "name": "Local developer"
+    "name": "OstermanEric",
+    "url": "https://github.com/OstermanEric"
   },
   "skills": "./skills/",
+  "repository": "https://github.com/OstermanEric/codex-shunt",
+  "license": "MIT",
+  "extensions": {
+    "com.openai": {
+      "onboardingSkill": "./skills/setup/SKILL.md"
+    }
+  },
   "interface": {
     "displayName": "Codex Shunt",
-    "shortDescription": "Route bulk work to Luna and measure usage.",
-    "longDescription": "Codex Shunt keeps judgment-heavy work in the primary model while routing explicitly acknowledged large reads and predictable analysis to a subscription-authenticated GPT-6 Luna worker. Guided setup verifies authentication and the worker path; local content-free telemetry produces CLI, JSON, CSV, and HTML reports.",
-    "developerName": "Local developer",
+    "shortDescription": "Route large reads to Luna",
+    "longDescription": "Route supported large local reads to GPT-6 Luna using your existing ChatGPT login. Configure line and byte thresholds and compare estimated credits against your preferred model with shunt stats. Available through manual/Git marketplace installation.",
+    "developerName": "OstermanEric",
+    "logo": "./assets/logo.svg",
+    "composerIcon": "./assets/logo.svg",
     "category": "Productivity",
     "capabilities": [
       "Read",
@@ -18,10 +28,9 @@
       "Analytics"
     ],
     "defaultPrompt": [
-      "Set up Codex Shunt and test its subscription worker.",
+      "Use $codex-shunt:setup to verify the worker and enable automatic routing.",
       "Use Codex Shunt to inspect this repository.",
-      "Show my Codex Shunt usage statistics.",
-      "Summarize this large test log with Codex Shunt."
+      "Show my Codex Shunt usage statistics."
     ]
   }
 }

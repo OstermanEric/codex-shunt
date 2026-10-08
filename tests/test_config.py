@@ -10,10 +10,35 @@ from unittest.mock import patch
 PLUGIN_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PLUGIN_ROOT / "src"))
 
-from codex_shunt.config import get_data_dir, load_config
+from codex_shunt.config import get_data_dir, load_config, save_user_config
 
 
 class ConfigTests(unittest.TestCase):
+    def test_comparison_default_persists_and_rejects_unknown_models(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary, patch.dict(
+            os.environ, {"CODEX_SHUNT_DATA_DIR": temporary}, clear=False
+        ):
+            config = load_config()
+            self.assertEqual(config["comparison_model"], "gpt-6.1-sol")
+            config["comparison_model"] = "gpt-6-sol"
+            save_user_config(config)
+            self.assertEqual(load_config()["comparison_model"], "gpt-6-sol")
+            config["comparison_model"] = "unknown-model"
+            with self.assertRaisesRegex(ValueError, "comparison_model"):
+                save_user_config(config)
+
+    def test_retired_settings_do_not_break_existing_config(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary, patch.dict(
+            os.environ, {"CODEX_SHUNT_DATA_DIR": temporary}, clear=False
+        ):
+            (Path(temporary) / "config.toml").write_text(
+                'post_tool_compression = true\npost_tool_min_bytes = 100000\n'
+                'retain_raw_worker_events = false\nworker_model = "gpt-5.6-luna"\n'
+            )
+            config = load_config()
+            self.assertNotIn("post_tool_compression", config)
+            self.assertEqual(config["worker_model"], "gpt-5.6-luna")
+
     def test_source_sharing_requires_explicit_acknowledgement_by_default(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             with patch.dict(
