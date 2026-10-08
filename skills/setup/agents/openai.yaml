@@ -1,0 +1,4 @@
+interface:
+  display_name: "Set up Codex Shunt"
+  short_description: "Verify the worker and turn on automatic routing"
+  default_prompt: "Use $codex-shunt:setup to set up Codex Shunt for local Codex."
