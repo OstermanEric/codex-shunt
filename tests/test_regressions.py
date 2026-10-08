@@ -13,7 +13,10 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from codex_shunt import hooks, worker
-from codex_shunt.cli import _color_enabled, _render_stats, _stats_payload, build_parser
+from codex_shunt.cli import (
+    _color_enabled, _failures_payload, _render_failures, _render_stats,
+    _stats_payload, build_parser,
+)
 from codex_shunt.config import load_config, save_user_config
 from codex_shunt.db import aggregate, record_worker_run
 from codex_shunt.reads import parse_read, read_metrics
@@ -162,8 +165,10 @@ class ComparisonRegressions(unittest.TestCase):
         self.assertEqual(result["comparison"]["estimated_savings_credits"], 0)
         self.assertEqual(result["setup_runs_excluded"], 1)
         rendered = _render_stats(result, "all")
-        self.assertIn("ESTIMATED SAVINGS  —", rendered)
-        self.assertIn("SUCCESS RATE      —", rendered)
+        self.assertIn("No worker runs yet", rendered)
+        self.assertNotIn("setup check", rendered)
+        self.assertNotIn("credits saved", rendered)
+        self.assertNotIn("0%", rendered)
 
     def test_failed_and_escalated_work_has_cost_but_no_counterfactual_savings(self):
         self.record()
@@ -175,13 +180,70 @@ class ComparisonRegressions(unittest.TestCase):
         self.assertEqual(result["workers"]["escalations"], 1)
         self.assertAlmostEqual(result["comparison"]["estimated_equivalent_credits"], 73.0)
         self.assertAlmostEqual(result["comparison"]["estimated_savings_credits"], 67.325)
+        rendered = _render_stats(result, "all")
+        self.assertIn("1 needed review", rendered)
+        self.assertIn("Outcomes", rendered)
+        self.assertNotIn("need primary review", rendered)
+
+    def test_failed_history_filters_setup_and_escalations_and_honors_period(self):
+        self.record("successful", created_at="2026-01-01T00:00:00+00:00")
+        self.record("old-error", error_type="WorkerError", created_at="2026-01-02T00:00:00+00:00")
+        self.record("failed", status="failed", created_at="2026-01-03T00:00:00+00:00")
+        self.record("review", needs_escalation=True, created_at="2026-01-04T00:00:00+00:00")
+        self.record("setup", task_kind="setup-smoke", error_type="WorkerError",
+                    created_at="2026-01-05T00:00:00+00:00")
+        self.record("flagged-error", error_type="timeout", needs_escalation=True,
+                    session_id="chat-id", turn_id="turn-id", created_at="2026-01-06T00:00:00+00:00")
+        result = _failures_payload("2026-01-03T00:00:00Z")
+        self.assertEqual([row["id"] for row in result["failures"]], ["flagged-error", "failed"])
+        rendered = _render_failures(result, result["since"])
+        self.assertIn("timeout", rendered)
+        self.assertIn("Run flagged-error", rendered)
+        self.assertIn("Chat chat-id", rendered)
+        self.assertIn("Turn turn-id", rendered)
+        self.assertIn("Unspecified error", rendered)
+
+    def test_failure_json_keeps_all_records_and_default_stats_contract(self):
+        for number in range(12):
+            self.record(f"failure-{number}", status="failed", error_type="WorkerError",
+                        created_at=f"2026-01-{number + 1:02d}T00:00:00+00:00")
+        parser = build_parser()
+        args = parser.parse_args(["stats", "--failures", "--since", "all", "--json", "--color", "always"])
+        output = io.StringIO()
+        with redirect_stdout(output), patch("codex_shunt.cli._stats_payload", side_effect=AssertionError):
+            self.assertEqual(args.handler(args), 0)
+        result = json.loads(output.getvalue())
+        self.assertEqual(len(result["failures"]), 12)
+        self.assertEqual(result["failures"][0]["id"], "failure-11")
+        self.assertNotIn("\033[", output.getvalue())
+        rendered = _render_failures(result, "all")
+        self.assertIn("newest 10 shown", rendered)
+        self.assertEqual(rendered.count("Run failure-"), 10)
+
+        args = parser.parse_args(["stats", "--since", "all", "--json"])
+        output = io.StringIO()
+        with redirect_stdout(output):
+            self.assertEqual(args.handler(args), 0)
+        normal = json.loads(output.getvalue())
+        self.assertEqual(normal["workers"]["failed"], 12)
+        self.assertIn("comparison", normal)
+        self.assertNotIn("failures", normal)
+
+    def test_empty_failed_history_does_not_treat_review_as_failure(self):
+        self.record(needs_escalation=True)
+        result = _failures_payload("all")
+        self.assertEqual(result["failures"], [])
+        self.assertIn("No failed worker runs", _render_failures(result, "all"))
 
     def test_stats_label_estimates_and_accept_per_command_comparison(self):
         self.record()
         result = aggregate("all")
         rendered = _render_stats(result, "all", color=False)
         self.assertIn("gpt-6.1-sol", rendered)
-        self.assertIn("Not measured account charges", rendered)
+        self.assertIn("Estimated vs", rendered)
+        self.assertNotIn("Standard rates", rendered)
+        self.assertNotIn("Not measured account charges", rendered)
+        self.assertIn("Not measured account charges", result["comparison"]["basis"])
         self.assertNotIn("exact", rendered.lower())
         self.assertNotIn("CONTEXT AVOIDED", rendered)
         self.assertIn("\033[", _render_stats(result, "all", color=True))

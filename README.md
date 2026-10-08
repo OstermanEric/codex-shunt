@@ -109,26 +109,90 @@ shunt stats --since all --json
 shunt stats --since 30d --compare-to gpt-6-sol
 ```
 
+The terminal report leads with estimated savings, then groups cost, run health,
+past outcomes, routing, and tokens in aligned rows. Green highlights savings and
+healthy runs; amber/red highlight fallbacks, escalations, and failures. Narrow terminals wrap
+automatically. Color is automatic in terminals; use `--color always` to force it,
+or `--color never` / `NO_COLOR=1` for plain text. `--json` remains machine-readable.
+
+“Needed review” records past escalation from Luna to the primary model. The
+Outcomes row summarizes previous attempts; it does not ask the user to review
+anything. Metric definitions and calculation notes are below, keeping the
+terminal report concise.
+
 The default comparison is **GPT-6.1 Sol**. Change `comparison_model` to persist a
 preference, or use `--compare-to` for one report. Both reprice historical token
 usage; they do not change the worker model. Supported comparison models are
 listed by `shunt stats --help`.
 
-Stats include routing/fallback counts, observed worker tokens, success, citation
-ranges, latency, and estimated credits. Setup checks are excluded. Failed and
-escalated work adds worker cost but contributes no comparison savings.
-
-**Savings are estimates:** successful worker tokens are repriced at the comparison
-model's standard rates, then all real worker costs are subtracted. This is not an
-observed account charge, measured subscription-allowance reduction, or end-to-end
-savings. Source interception is a gross estimate that does not subtract replacement
-summaries, verification, or retries. Citation checks validate file paths and line
-ranges, not the truth of a claim.
-
 Reports discover both Terminal and Codex plugin-data stores. Set
 `CODEX_SHUNT_DATA_DIR` only to intentionally scope config and metrics to one store.
-The bundled rate snapshot is dated October 8, 2026.
-[Official rates](https://learn.chatgpt.com/docs/pricing#token-rates).
+
+### Inspect failed runs
+
+```bash
+shunt stats --failures --since all
+shunt stats --failures --since 7d --json
+```
+
+The terminal view shows the newest 10 failed attempts with local timestamps, full
+run IDs, error types, models, task kinds, duration, and token counts. Recorded
+chat/turn IDs are shown when available. JSON includes every matching attempt and
+all stored metadata. Setup checks and ordinary escalations are excluded; an
+escalated attempt with a recorded error is included.
+
+Telemetry keeps counts, identifiers, and hashes, so a historical failure may
+have only an error type, without its detailed message, command, or source paths.
+For future hook failures, start Codex with `CODEX_SHUNT_DEBUG=1` to print runtime
+error details to stderr. A failed `shunt inspect` also prints its error directly.
+
+### How metrics are calculated
+
+All metrics cover the selected `--since` period. Worker token counts, run counts,
+and durations come from recorded runs; credits and intercepted source tokens are
+estimates. Synthetic setup checks are excluded from worker metrics.
+
+| Metric | Meaning and calculation |
+| --- | --- |
+| Credits saved / extra cost | Comparison cost minus worker cost. A negative result is shown as extra cost. |
+| Lower / higher cost | Savings divided by comparison cost, shown as a percentage. Omitted when comparison cost is zero. |
+| Cost: worker | Sum of recorded standard-rate credit estimates for all non-setup worker attempts, including failures and escalations. |
+| Cost: comparison | Successful worker tokens repriced at the selected comparison model's standard rates. Failed and escalated attempts contribute no comparison cost. |
+| Runs | Successful attempts divided by all non-setup worker attempts. Success requires a completed run with no recorded error or request for primary review. |
+| Average time | Total recorded worker duration divided by all non-setup attempts, including failures and escalations. Displayed in seconds. |
+| Outcomes: failed | Attempts with a failed status or recorded error. Inspect them with `shunt stats --failures`. |
+| Outcomes: needed review | Past attempts where the worker requested escalation to the primary model, not user review. Failure and escalation counts can overlap. |
+| Citations | Valid citation ranges divided by all recorded ranges. Validation checks allowed files and line bounds, not whether a claim is true. |
+| Routing: routed | Hook reads replaced by accepted worker results; the original read was intercepted. |
+| Routing: fallbacks | Routing attempts that allowed the original read to continue, such as missing consent, worker errors, invalid citations, or escalation. |
+| Routing: observed only | Eligible reads seen while strict routing was off. No worker replacement occurred. Hidden when zero. |
+| Tokens: input | Observed worker input tokens across all non-setup attempts. Includes cached input. |
+| Tokens: cached | The subset of input served from cache; do not add it to input again. |
+| Tokens: output | Observed worker output tokens. Reasoning tokens are a subset of output, not an extra charge. |
+| Source | Gross estimated tokens intercepted by enforced hook routing: sum of `ceil(requested source bytes / 4)` for routed reads. Repeat reads count again. |
+| Setup checks excluded | Number of synthetic setup runs omitted from worker metrics. Available as `setup_runs_excluded` in `--json`. |
+
+Worker attempts and routing events are separate counts: manual inspections add
+worker runs, and a routing fallback can happen before a worker starts.
+
+Credit estimates use rates per million tokens:
+
+```text
+credits = ((input - cached) × input_rate
+           + cached × cached_rate
+           + output × output_rate) / 1,000,000
+```
+
+The bundled standard-rate snapshot is dated **October 8, 2026**; its date is also
+available as `comparison.rate_date` in `--json`. See the
+[official rates](https://learn.chatgpt.com/docs/pricing#token-rates).
+Changing the comparison model reprices historical successful tokens; recorded
+worker cost stays the same. All real worker costs are subtracted from comparison
+cost, so failed and escalated work reduces estimated savings.
+
+**Credits are estimates, not measured account charges, subscription-allowance
+reductions, or end-to-end savings.** Gross source interception does not subtract
+replacement summaries, verification, or retries, so it is not net tokens saved.
 
 ## Development
 
