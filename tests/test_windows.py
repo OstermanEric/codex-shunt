@@ -88,6 +88,22 @@ class WindowsReadTests(unittest.TestCase):
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertEqual(completed.stdout, "")
 
+    def test_python_hook_routes_a_real_event_with_shared_runtime(self):
+        fake, log = packaged.PackagedPluginTests()._fake_codex(self.root)
+        command = ('Get-Content -LiteralPath "src\\space name.txt"' if os.name == "nt"
+                   else 'cat "src/space name.txt"')
+        event = {"cwd": str(self.root), "tool_name": "Bash", "tool_input": {"cmd": command}}
+        environment = {**os.environ, "CODEX_SHUNT_CODEX_PATH": str(fake),
+                       "CODEX_SHUNT_DATA_DIR": str(self.root / "data"),
+                       "CODEX_SHUNT_SOURCE_SHARING_ACKNOWLEDGED": "true", "FAKE_CODEX_LOG": str(log)}
+        completed = subprocess.run([sys.executable, "-X", "utf8", str(ROOT / "scripts/codex-shunt-hook.py"), "pre"],
+                                   input=json.dumps(event), text=True, capture_output=True,
+                                   env=environment, check=False, timeout=30)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertTrue(completed.stdout, completed.stderr)
+        self.assertEqual(json.loads(completed.stdout)["hookSpecificOutput"]["permissionDecision"], "deny")
+        self.assertTrue(log.is_file())
+
 
 @unittest.skipUnless(os.name == "nt", "requires native Windows PowerShell")
 class WindowsIntegrationTests(unittest.TestCase):
