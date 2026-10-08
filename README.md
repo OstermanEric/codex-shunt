@@ -1,4 +1,25 @@
-# Codex Shunt
+<p align="center">
+  <img src="assets/logo.svg" width="80" height="80" alt="Codex Shunt logo">
+</p>
+
+<h1 align="center">Codex Shunt</h1>
+
+<p align="center">
+  <strong>Large reads. Compact evidence. Your primary model stays in charge.</strong>
+</p>
+
+<p align="center">
+  <a href="https://github.com/OstermanEric/codex-shunt/actions/workflows/tests.yml"><img src="https://github.com/OstermanEric/codex-shunt/actions/workflows/tests.yml/badge.svg" alt="Tests status"></a>
+  <img src="https://img.shields.io/badge/Python-3.11%2B-a9b6ff?labelColor=161b33" alt="Requires Python 3.11 or newer">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-a9b6ff?labelColor=161b33" alt="MIT license"></a>
+</p>
+
+<p align="center">
+  <a href="#install"><img src="https://img.shields.io/badge/Install-6366f1?style=for-the-badge" alt="Install"></a>
+  <a href="#how-it-works"><img src="https://img.shields.io/badge/How_it_works-161b33?style=for-the-badge" alt="How it works"></a>
+  <a href="#configure"><img src="https://img.shields.io/badge/Configure-161b33?style=for-the-badge" alt="Configure"></a>
+  <a href="#stats"><img src="https://img.shields.io/badge/Stats-161b33?style=for-the-badge" alt="Stats"></a>
+</p>
 
 Route large repository reads to **GPT-6 Luna** using your existing ChatGPT/Codex
 login. The primary model receives a compact, cited summary and keeps responsibility
@@ -33,6 +54,32 @@ environment variables from its worker; no separate API key is needed.
 **Distribution:** this hook-based plugin uses manual/Git marketplace installation.
 Lifecycle-hook packages are currently ineligible for the public Plugins Directory.
 [Official packaging guidance](https://developers.openai.com/plugins/build/plugins#bundled-mcp-servers-and-lifecycle-hooks).
+
+## How it works
+
+```mermaid
+flowchart TD
+    A[Repository read] --> B{Eligible read?}
+    B -->|No| F[Original read proceeds]
+    B -->|Yes| C[GPT-6 Luna]
+    C --> D{Accepted result?}
+    D -->|Yes| E[Compact cited summary]
+    D -->|No or escalation| F
+    E --> G[Primary model]
+    F --> G
+    classDef primary fill:#161b33,color:#eef0ff,stroke:#a9b6ff
+    classDef worker fill:#eef0ff,color:#161b33,stroke:#6366f1
+    class A,E,G primary
+    class B,C,D,F worker
+```
+
+Eligible reads use a supported command and meet the configured line or byte
+threshold. Filtered files go to Luna; only a successful result with valid citation
+ranges replaces the read. The primary model reviews the returned evidence.
+
+Routing requires completed setup and source-sharing acknowledgement. If consent
+or the worker runtime is unavailable, the original read proceeds. The primary
+model remains responsible for verifying evidence and making edits.
 
 ## Configure
 
@@ -103,6 +150,12 @@ CODEX_SHUNT_BYPASS=1 cat path/to/file
 
 ## Stats
 
+![Codex Shunt terminal stats showing estimated credits, run outcomes, citation validity, routing, and token usage](assets/stats.png)
+
+*Development-history snapshot, October 8, 2026, from `shunt stats --since all`.
+Includes historical failures and escalations; it is not a performance benchmark
+or a promise of savings.*
+
 ```bash
 shunt stats --since 7d
 shunt stats --since all --json
@@ -128,6 +181,10 @@ listed by `shunt stats --help`.
 Reports discover both Terminal and Codex plugin-data stores. Set
 `CODEX_SHUNT_DATA_DIR` only to intentionally scope config and metrics to one store.
 
+**Credits are estimates, not measured account charges or end-to-end savings.**
+Source interception is a gross estimate, not net tokens saved. See the expandable
+metrics reference below for definitions and calculation details.
+
 ### Inspect failed runs
 
 ```bash
@@ -147,6 +204,9 @@ For future hook failures, start Codex with `CODEX_SHUNT_DEBUG=1` to print runtim
 error details to stderr. A failed `shunt inspect` also prints its error directly.
 
 ### How metrics are calculated
+
+<details>
+<summary><strong>Metric definitions, credit formula, and accounting limits</strong></summary>
 
 All metrics cover the selected `--since` period. Worker token counts, run counts,
 and durations come from recorded runs; credits and intercepted source tokens are
@@ -193,6 +253,8 @@ cost, so failed and escalated work reduces estimated savings.
 **Credits are estimates, not measured account charges, subscription-allowance
 reductions, or end-to-end savings.** Gross source interception does not subtract
 replacement summaries, verification, or retries, so it is not net tokens saved.
+
+</details>
 
 ## Development
 
