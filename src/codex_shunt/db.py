@@ -9,7 +9,6 @@ from contextlib import closing
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote
 
 from .config import get_data_dir
 from .pricing import DEFAULT_COMPARISON_MODEL, MODEL_RATES, RATE_DATE, credits_for
@@ -136,7 +135,7 @@ def _connect_readonly(data_dir: Path) -> sqlite3.Connection | None:
     path = data_dir / "metrics.sqlite3"
     if not path.is_file():
         return None
-    uri = f"file:{quote(str(path), safe='/')}?mode=ro"
+    uri = path.resolve().as_uri() + "?mode=ro"
     try:
         connection = sqlite3.connect(uri, uri=True)
         connection.row_factory = sqlite3.Row

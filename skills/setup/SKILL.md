@@ -9,6 +9,10 @@ Use the `scripts/codex-shunt` runner bundled in this plugin. Its root is two
 directories above this file. Do not require a source checkout or the optional
 `shunt` Terminal symlink.
 
+On native Windows, invoke the bundled runner with
+`py -3 -X utf8 "<resolved-plugin-root>/scripts/codex-shunt" <command>`.
+The optional Terminal command is `shunt.cmd` on Windows.
+
 1. Run the bundled runner's `doctor` command and report any missing Python,
    Codex executable, or ChatGPT authentication prerequisite. The initial
    source-sharing check is expected to fail until acknowledgement. Help the

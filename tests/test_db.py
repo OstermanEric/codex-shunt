@@ -62,6 +62,7 @@ class DatabaseTests(unittest.TestCase):
                 os.environ,
                 {
                     "HOME": str(home),
+                    "USERPROFILE": str(home),
                     "CODEX_HOME": str(root / "codex-home"),
                     "PLUGIN_DATA": str(plugin_data),
                 },
@@ -102,6 +103,8 @@ class DatabaseTests(unittest.TestCase):
             with patch.dict(
                 os.environ,
                 {
+                    "HOME": str(root),
+                    "USERPROFILE": str(root),
                     "CODEX_HOME": str(root / "codex-home"),
                     "PLUGIN_DATA": str(plugin_data),
                 },

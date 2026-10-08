@@ -27,9 +27,11 @@ for decisions and edits.
 
 Shunt is a local Codex plugin with a Python standard-library runtime. It needs
 Python 3.11+, a Codex CLI with ChatGPT authentication, and access to GPT-6 Luna.
-Supported hosts are macOS, Linux, and Windows through WSL2.
+Supported hosts are macOS, Linux, and native Windows (PowerShell). WSL2 also works.
 
 ## Install
+
+### macOS / Linux / WSL2
 
 Run this once in Terminal (macOS, Linux, or WSL2):
 
@@ -40,6 +42,25 @@ curl -fsSL https://raw.githubusercontent.com/OstermanEric/codex-shunt/main/insta
 The installer downloads Shunt, installs the Git marketplace plugin, creates the
 `shunt` command, and starts guided setup. It adds `~/.local/bin` to your bash/zsh
 startup file when needed; reopen Terminal afterward to use `shunt`.
+
+### Windows (no WSL required)
+
+Install [Git for Windows](https://git-scm.com/download/win),
+[Python 3.11+ with the `py` launcher](https://www.python.org/downloads/windows/),
+and the [standalone Codex CLI](https://learn.chatgpt.com/docs/codex/cli).
+Make sure `git`, `py -3`, and `codex.exe` work in PowerShell, and sign in with
+`codex login` using ChatGPT. Then run:
+
+```powershell
+irm https://raw.githubusercontent.com/OstermanEric/codex-shunt/main/install.ps1 | iex
+```
+
+The installer downloads Shunt, installs the plugin, adds `shunt.cmd` to your
+user PATH, and starts guided setup. It requires no administrator access.
+Reopen PowerShell afterward if another terminal does not recognize `shunt`.
+Use the native `codex.exe`; npm's `.cmd` / `.bat` wrappers are not supported.
+
+### Finish setup
 
 Setup explains source sharing, checks the existing login, sends a synthetic
 two-line fixture through Luna, and enables routing only after verification.
@@ -125,6 +146,18 @@ The pre-hook recognizes a deliberately small set of read-only shell commands:
 - `rg` with a pattern and explicit files/globs; supported flags are
   `-n`, `-i`, `-F`, and their long forms.
 - The same commands through `rtk` or `rtk proxy`.
+
+On native Windows, `Get-Content` (also `gc`, `cat`, or `type`) supports **one
+explicit file** as a positional argument or with `-Path` / `-LiteralPath`, plus optional `-Raw`,
+`-TotalCount N`, or `-Tail N`. For example:
+
+```powershell
+Get-Content -LiteralPath 'src\large file.py'
+Get-Content -LiteralPath 'src\large file.py' -TotalCount 600
+```
+
+Windows paths, including spaces and drive letters, are supported. PowerShell
+wildcards, pipelines, expressions, and additional parameters run normally.
 
 Commands containing edits, pipelines, redirections, compound operations, shell
 expansions, or unsupported flags run normally. MCP tools are not intercepted.
@@ -267,13 +300,16 @@ python3 -m unittest discover -s tests -v
 python3 -m compileall -q src
 ```
 
+On Windows, use `py -3` in place of `python3`. CI runs the suite on macOS,
+Linux, and Windows, including the PowerShell installer and hook on Windows.
+
 After updating an installed plugin, reinstall/refresh it and start a new chat.
 Changed hook definitions require another trust review. Removed commands from
 0.1 are `summarize-log`, `report`, `export`, `feedback`, and `data-dir`; use
 `inspect`, `stats --json`, and `config show`. Existing metrics remain readable.
 
 For troubleshooting, run `shunt status` or set `CODEX_SHUNT_DEBUG=1` to explain
-hook fallbacks. Native PowerShell, web ChatGPT, and cloud orchestration cannot
+hook fallbacks. Web ChatGPT and cloud orchestration cannot
 run this local hook/worker flow.
 
 Licensed under [MIT](LICENSE).

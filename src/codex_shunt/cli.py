@@ -88,7 +88,7 @@ def _doctor_checks() -> list[dict[str, Any]]:
         PLUGIN_ROOT / ".codex-plugin" / "plugin.json",
         PLUGIN_ROOT / "hooks" / "hooks.json",
         PLUGIN_ROOT / "scripts" / "codex-shunt",
-        PLUGIN_ROOT / "scripts" / "codex-shunt-hook",
+        PLUGIN_ROOT / "scripts" / ("codex-shunt-hook.py" if sys.platform == "win32" else "codex-shunt-hook"),
         PLUGIN_ROOT / "schemas" / "worker-result.schema.json",
     ]
     missing = [str(path) for path in required if not path.is_file()]

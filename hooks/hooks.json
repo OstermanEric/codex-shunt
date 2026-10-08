@@ -8,6 +8,7 @@
           {
             "type": "command",
             "command": "\"$PLUGIN_ROOT/scripts/codex-shunt-hook\" pre",
+            "commandWindows": "py -3 -X utf8 -c \"import os,runpy; runpy.run_path(os.path.join(os.environ['PLUGIN_ROOT'],'scripts','codex-shunt-hook.py'),run_name='__main__')\" pre",
             "timeout": 180,
             "statusMessage": "Routing large reads through Codex Shunt when strict mode is enabled"
           }

@@ -64,8 +64,11 @@ class RoutingRegressions(unittest.TestCase):
                 run.assert_not_called()
 
     def test_routing_uses_requested_lines_and_bytes(self):
-        for command in ["cat large.txt", "tail -n +1 large.txt", "head -n 20 wide.txt",
-                        "head -c 100000 wide.txt", "cat *.txt", "rtk proxy cat large.txt"]:
+        commands = ["cat large.txt", "tail -n +1 large.txt", "head -n 20 wide.txt",
+                    "head -c 100000 wide.txt", "rtk proxy cat large.txt"]
+        if sys.platform != "win32":
+            commands.append("cat *.txt")  # Windows cat is Get-Content; wildcards stay raw.
+        for command in commands:
             with self.subTest(command=command):
                 output, run, _ = self.invoke(command)
                 self.assertEqual(json.loads(output)["hookSpecificOutput"]["permissionDecision"], "deny")

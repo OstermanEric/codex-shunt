@@ -22,6 +22,10 @@ When `PLUGIN_ROOT` is already available, use
 ordinary Terminal and local development. If no bundled runner exists, continue
 in the primary model and tell the user the plugin installation is incomplete.
 
+On native Windows, invoke the runner with
+`py -3 -X utf8 "<resolved-plugin-root>/scripts/codex-shunt" <command>`.
+Use PowerShell syntax for paths and arguments.
+
 ## Route a read
 
 1. Formulate one narrow question and the smallest useful set of repository paths.

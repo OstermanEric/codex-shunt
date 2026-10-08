@@ -58,7 +58,7 @@ class PackagedPluginTests(unittest.TestCase):
         return cache_root
 
     def _fake_codex(self, root: Path) -> tuple[Path, Path]:
-        executable = root / "codex"
+        executable = root / "codex.py"
         log_path = root / "worker-invocation.json"
         executable.write_text(
             f"#!{sys.executable}\n"
@@ -90,6 +90,11 @@ class PackagedPluginTests(unittest.TestCase):
         executable.chmod(0o755)
         return executable, log_path
 
+    def _hook_command(self, cache_root: Path) -> list[str]:
+        if os.name == "nt":
+            return [sys.executable, "-X", "utf8", str(cache_root / "scripts/codex-shunt-hook.py"), "pre"]
+        return [str(cache_root / "scripts/codex-shunt-hook"), "pre"]
+
     def test_fresh_cache_copy_runs_bundled_direct_worker(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             cache_root = self._copy_to_fresh_cache(temporary)
@@ -110,6 +115,7 @@ class PackagedPluginTests(unittest.TestCase):
 
             completed = subprocess.run(
                 [
+                    sys.executable,
                     str(cache_root / "scripts" / "codex-shunt"),
                     "inspect",
                     "--root",
@@ -144,7 +150,7 @@ class PackagedPluginTests(unittest.TestCase):
             cache_root = self._copy_to_fresh_cache(temporary)
             (cache_root / "scripts" / "codex-shunt").unlink()
             completed = subprocess.run(
-                [str(cache_root / "scripts" / "codex-shunt-hook"), "pre"],
+                self._hook_command(cache_root),
                 input="{}",
                 check=False,
                 capture_output=True,
@@ -175,13 +181,14 @@ class PackagedPluginTests(unittest.TestCase):
             environment.update(
                 {
                     "HOME": temporary,
+                    "USERPROFILE": temporary,
                     "PLUGIN_ROOT": str(cache_root),
                     "PLUGIN_DATA": str(plugin_data),
                 }
             )
 
             completed = subprocess.run(
-                [str(cache_root / "scripts" / "codex-shunt-hook"), "pre"],
+                self._hook_command(cache_root),
                 input=json.dumps(event),
                 check=False,
                 capture_output=True,
@@ -215,6 +222,7 @@ class PackagedPluginTests(unittest.TestCase):
             environment.update(
                 {
                     "HOME": temporary,
+                    "USERPROFILE": temporary,
                     "PLUGIN_ROOT": str(cache_root),
                     "PLUGIN_DATA": str(plugin_data),
                     "CODEX_SHUNT_CODEX_PATH": str(fake_codex),
@@ -225,7 +233,7 @@ class PackagedPluginTests(unittest.TestCase):
             )
 
             completed = subprocess.run(
-                [str(cache_root / "scripts" / "codex-shunt-hook"), "pre"],
+                self._hook_command(cache_root),
                 input=json.dumps(event),
                 check=False,
                 capture_output=True,

@@ -10,6 +10,7 @@ INSTALLER = PLUGIN_ROOT / "scripts" / "install-command"
 RUNNER = PLUGIN_ROOT / "scripts" / "codex-shunt"
 
 
+@unittest.skipIf(os.name == "nt", "POSIX symlink installer; Windows uses shunt.cmd")
 class InstallCommandTests(unittest.TestCase):
     def run_installer(self, bin_dir: Path, *args: str) -> subprocess.CompletedProcess[str]:
         environment = os.environ.copy()

@@ -3,7 +3,10 @@
 import errno
 import json
 import os
-import pty
+try:
+    import pty
+except ImportError:  # Windows uses the PowerShell installer tests.
+    pty = None
 import select
 import signal
 import subprocess
@@ -16,6 +19,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
+@unittest.skipIf(pty is None, "POSIX installer; native Windows is covered separately")
 class BootstrapTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()

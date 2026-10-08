@@ -57,15 +57,17 @@ def find_codex() -> str:
 
     home = Path.home()
     # Prefer the desktop runtime over a possibly stale standalone installation.
-    for applications in (Path("/Applications"), home / "Applications"):
-        for app in ("Codex.app", "ChatGPT.app"):
-            resources = applications / app / "Contents" / "Resources"
-            candidates.extend((resources / "codex-cli" / "bin" / "codex", resources / "codex"))
+    if sys.platform != "win32":
+        for applications in (Path("/Applications"), home / "Applications"):
+            for app in ("Codex.app", "ChatGPT.app"):
+                resources = applications / app / "Contents" / "Resources"
+                candidates.extend((resources / "codex-cli" / "bin" / "codex", resources / "codex"))
 
-    executable = shutil.which("codex")
+    # Prefer a native executable on Windows, avoiding npm's cmd.exe shim.
+    executable = shutil.which("codex.exe" if sys.platform == "win32" else "codex")
     if executable:
         candidates.append(Path(executable))
-    candidates.append(home / ".local" / "bin" / "codex")
+    candidates.append(home / ".local" / "bin" / ("codex.exe" if sys.platform == "win32" else "codex"))
 
     seen: set[str] = set()
     for candidate in candidates:
@@ -73,13 +75,23 @@ def find_codex() -> str:
         if normalized in seen:
             continue
         seen.add(normalized)
+        if sys.platform == "win32" and candidate.suffix.lower() in {".cmd", ".bat"}:
+            continue
         if candidate.is_file() and os.access(candidate, os.X_OK):
             return normalized
 
     raise WorkerError(
         "The Codex CLI was not found on PATH or in a standard standalone/desktop location. "
-        "Set CODEX_SHUNT_CODEX_PATH to the executable path or install the Codex CLI."
+        "Set CODEX_SHUNT_CODEX_PATH to the executable path or install the standalone Codex CLI. "
+        "On Windows, use codex.exe rather than an npm .cmd/.bat shim."
     )
+
+
+def codex_command(executable: str) -> list[str]:
+    # Explicit Python-script overrides also make CLI fixtures portable in CI.
+    if Path(executable).suffix.lower() == ".py":
+        return [sys.executable, executable]
+    return [executable]
 
 
 def auth_status(codex: str | None = None) -> tuple[bool, str]:
@@ -88,9 +100,10 @@ def auth_status(codex: str | None = None) -> tuple[bool, str]:
     environment.pop("CODEX_API_KEY", None)
     environment.pop("OPENAI_API_KEY", None)
     completed = subprocess.run(
-        [executable, "login", "status"],
+        [*codex_command(executable), "login", "status"],
         capture_output=True,
         text=True,
+        encoding="utf-8",
         timeout=15,
         env=environment,
         check=False,
@@ -270,7 +283,7 @@ def run_worker(
             result_path = workspace / ".codex-shunt-result.json"
             schema_path = PLUGIN_ROOT / "schemas" / "worker-result.schema.json"
             command = [
-                codex,
+                *codex_command(codex),
                 "exec",
                 "--json",
                 "--ephemeral",
@@ -302,6 +315,7 @@ def run_worker(
                 command,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
                 timeout=int(config["worker_timeout_seconds"]),
                 env=environment,
                 check=False,

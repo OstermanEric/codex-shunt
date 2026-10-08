@@ -49,6 +49,7 @@ class WorkerUsageTests(unittest.TestCase):
         self.assertEqual(usage["output_tokens"], 90_000)
         self.assertEqual(usage["reasoning_output_tokens"], 10_000)
 
+    @unittest.skipIf(sys.platform == "win32", "macOS desktop bundle paths")
     def test_prefers_current_desktop_runtime_over_standalone(self) -> None:
         bundled = "/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex"
         with patch.dict(environ, {}, clear=True), \
