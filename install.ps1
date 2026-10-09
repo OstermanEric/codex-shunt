@@ -4,8 +4,12 @@ $ErrorActionPreference = 'Stop'
 function Install-Shunt {
     $checkout = Join-Path $HOME '.codex\plugins\codex-shunt'
     $repository = 'https://github.com/OstermanEric/codex-shunt.git'
-    Get-Command git -ErrorAction Stop | Out-Null
-    Get-Command py -ErrorAction Stop | Out-Null
+    if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
+        throw 'Git is missing. Install Git for Windows from https://git-scm.com/download/win, reopen PowerShell, and retry.'
+    }
+    if (-not (Get-Command py -ErrorAction SilentlyContinue)) {
+        throw 'Python is missing. Install Python 3.11+ with the py launcher from https://www.python.org/downloads/windows/, reopen PowerShell, and retry.'
+    }
     & py -3 -c 'import sys; sys.exit(sys.version_info < (3, 11))'
     if ($LASTEXITCODE -ne 0) { throw 'Install Python 3.11+ with the Python launcher, then retry.' }
 
@@ -24,7 +28,17 @@ function Install-Shunt {
     }
     if ($LASTEXITCODE -ne 0) { throw 'Could not download/update Codex Shunt.' }
 
-    $codex = & py -3 -X utf8 -c 'import sys; sys.path.insert(0, sys.argv[1]); from codex_shunt.worker import find_codex; print(find_codex())' (Join-Path $checkout 'src')
+    $findCodex = @'
+import sys
+sys.path.insert(0, sys.argv[1])
+from codex_shunt.worker import find_codex
+try:
+    print(find_codex())
+except RuntimeError as error:
+    print(error, file=sys.stderr)
+    sys.exit(1)
+'@
+    $codex = & py -3 -X utf8 -c $findCodex (Join-Path $checkout 'src')
     if ($LASTEXITCODE -ne 0) { throw 'Install the standalone Codex CLI and sign in with ChatGPT, then retry.' }
     & $codex plugin marketplace add $checkout
     if ($LASTEXITCODE -ne 0) { throw 'Could not add the Shunt marketplace.' }
@@ -48,7 +62,10 @@ function Install-Shunt {
     if (@($env:Path -split ';') -notcontains $binDir) { $env:Path = "$binDir;$env:Path" }
     Write-Host 'Installed shunt. Starting guided setup...'
     & py -3 -X utf8 (Join-Path $checkout 'scripts\codex-shunt') setup
-    if ($LASTEXITCODE -ne 0) { throw 'Setup did not complete. Fix the reported prerequisite and run shunt setup.' }
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host 'Shunt is installed; setup still needs attention. Read the message above and run shunt setup when ready.' -ForegroundColor Yellow
+        return
+    }
     Write-Host 'Review and trust the Shunt hook in Codex, then start a new chat.'
     Write-Host 'Usage: shunt stats --since 7d'
 }

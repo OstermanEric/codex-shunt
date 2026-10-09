@@ -28,7 +28,7 @@ from .db import aggregate, database_path, fetch_rows
 from .hooks import hook_pre
 from .pricing import MODEL_RATES
 from .sources import collect_sources
-from .worker import WorkerError, auth_status, find_codex, run_worker
+from .worker import WorkerError, auth_status, find_codex, run_worker, worker_limitation
 
 
 def _color_enabled(mode: str) -> bool:
@@ -149,7 +149,10 @@ def command_setup(args: argparse.Namespace) -> int:
     print(SOURCE_SHARING_NOTICE)
     print()
 
-    accepted = bool(args.accept_source_sharing)
+    config = load_config()
+    accepted = bool(args.accept_source_sharing or config["source_sharing_acknowledged"])
+    if config["source_sharing_acknowledged"]:
+        print("Source-sharing acknowledgement is already recorded.\n")
     if not accepted and sys.stdin.isatty():
         response = input("Type 'accept' to continue, or press Enter to cancel: ").strip().lower()
         accepted = response == "accept"
@@ -161,7 +164,6 @@ def command_setup(args: argparse.Namespace) -> int:
         )
         return 2
 
-    config = load_config()
     config["source_sharing_acknowledged"] = True
     if args.enable_strict_routing:
         # Enable only after the worker test succeeds.
@@ -191,20 +193,28 @@ def command_setup(args: argparse.Namespace) -> int:
                 max_files=int(config["max_source_files"]),
                 max_bytes=int(config["max_source_bytes"]),
             )
-            outcome = run_worker(
-                question=(
-                    "Confirm the safety mode stated in setup-check.txt. Return one concise "
-                    "finding with an exact citation."
-                ),
-                selection=selection,
-                config=config,
-                task_kind="setup-smoke",
-            )
+            try:
+                outcome = run_worker(
+                    question=(
+                        "Read setup-check.txt from the current directory. Confirm the safety mode "
+                        "stated on line 2. Return one concise finding citing setup-check.txt line 2. "
+                        "If you cannot read it, report the read error and request escalation."
+                    ),
+                    selection=selection,
+                    config=config,
+                    task_kind="setup-smoke",
+                )
+            except WorkerError as exc:
+                raise WorkerError(
+                    "Shunt is installed, but Luna verification failed. Automatic routing remains off.\n"
+                    f"{exc}\nResolve the reported issue, then run `shunt setup`; reinstalling is unnecessary."
+                ) from exc
         if (outcome.result.get("needs_escalation") or outcome.citation_count < 1
                 or outcome.valid_citation_count != outcome.citation_count):
             raise WorkerError(
-                "The Luna setup check did not provide reliable cited evidence; "
-                "strict routing was not enabled"
+                "Shunt is installed, but Luna could not verify the sample file. "
+                "Automatic routing remains off.\n" + worker_limitation(outcome.result) +
+                "\nResolve the reported issue, then run `shunt setup`; reinstalling is unnecessary."
             )
         print(
             f"[PASS] luna_worker: {outcome.worker_model}, "

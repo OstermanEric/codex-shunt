@@ -296,6 +296,16 @@ class WorkerValidationRegressions(unittest.TestCase):
                     with self.assertRaises(worker.WorkerError):
                         worker._validate_result(result, root, 10000, {"source.txt"})
 
+    def test_empty_findings_require_escalation_and_keep_the_reason(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            result = {"summary": "Unable to read file", "findings": [],
+                      "limitations": ["Access denied by sandbox"], "recommended_reads": [],
+                      "needs_escalation": False}
+            with self.assertRaisesRegex(worker.WorkerError, "Access denied by sandbox"):
+                worker._validate_result(result, Path(temporary), 10000, {"source.txt"})
+            result["needs_escalation"] = True
+            self.assertEqual(worker._validate_result(result, Path(temporary), 10000, {"source.txt"}), (0, 0))
+
 
 if __name__ == "__main__":
     unittest.main()

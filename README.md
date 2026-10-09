@@ -48,8 +48,10 @@ startup file when needed; reopen Terminal afterward to use `shunt`.
 Install [Git for Windows](https://git-scm.com/download/win),
 [Python 3.11+ with the `py` launcher](https://www.python.org/downloads/windows/),
 and the [standalone Codex CLI](https://learn.chatgpt.com/docs/codex/cli).
-Make sure `git`, `py -3`, and `codex.exe` work in PowerShell, and sign in with
-`codex login` using ChatGPT. Then run:
+Make sure `git` and `py -3` work in PowerShell, and sign in to Codex using
+ChatGPT. Shunt finds Codex on PATH or in the standard Windows installer folders,
+including versioned installs, so you do not need to set an executable path.
+Then run:
 
 ```powershell
 irm https://raw.githubusercontent.com/OstermanEric/codex-shunt/main/install.ps1 | iex
@@ -64,10 +66,16 @@ Use the native `codex.exe`; npm's `.cmd` / `.bat` wrappers are not supported.
 
 Setup explains source sharing, checks the existing login, sends a synthetic
 two-line fixture through Luna, and enables routing only after verification.
+Recorded source-sharing acknowledgement is reused when retrying setup. If Luna
+verification fails, Shunt stays installed and routing stays off; the error shows
+the worker's explanation. Resolve that issue and run `shunt setup` again.
+On Windows, the worker keeps your existing Codex sandbox selection while running
+read-only. Complete Codex's sandbox setup if its file reads are blocked; see the
+[Windows sandbox guide](https://learn.chatgpt.com/docs/windows/windows-sandbox).
 Review and trust the plugin's hook in Codex, then start a new chat. Installed
 plugin users can also invoke `$codex-shunt:setup` without a Terminal command.
 
-Shunt prefers the desktop app's bundled CLI, then searches PATH.
+On macOS, Shunt prefers the desktop app's bundled CLI, then searches PATH.
 To choose a specific runtime, set `CODEX_SHUNT_CODEX_PATH`. If authentication is missing,
 run `codex login` with ChatGPT. Shunt uses `codex exec` and removes API-key
 environment variables from its worker; no separate API key is needed.
@@ -302,6 +310,7 @@ python3 -m compileall -q src
 
 On Windows, use `py -3` in place of `python3`. CI runs the suite on macOS,
 Linux, and Windows, including the PowerShell installer and hook on Windows.
+Windows coverage also includes Python 3.14.
 
 After updating an installed plugin, reinstall/refresh it and start a new chat.
 Changed hook definitions require another trust review. Removed commands from
