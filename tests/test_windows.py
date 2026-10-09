@@ -141,15 +141,36 @@ class WindowsReadTests(unittest.TestCase):
         with patch.dict(os.environ, {"CODEX_HOME": str(codex_home)}), \
                 patch.object(worker, "find_codex", return_value="fixture.exe"), \
                 patch.object(worker, "ensure_chatgpt_auth"), \
+                patch.object(worker, "prepare_windows_workspace") as prepare, \
                 patch.object(worker.subprocess, "run", side_effect=execute), \
                 patch.object(worker, "record_worker_run") as record:
             config = {"source_sharing_acknowledged": True, "worker_model": "gpt-6-luna",
                       "reasoning_effort": "low", "worker_timeout_seconds": 20, "max_output_chars": 5000}
             outcome = worker.run_worker(question="read the file", selection=self.selection, config=config, task_kind="setup-smoke")
         self.assertTrue(outcome.result["needs_escalation"])
+        prepare.assert_called_once()
+        self.assertNotIn("OPENAI_API_KEY", prepare.call_args.args[4])
         self.assertEqual(outcome.valid_citation_count, 0)
         self.assertEqual(record.call_args.args[0]["status"], "escalated")
         self.assertNotIn("Sandbox not provisioned", json.dumps(record.call_args.args[0]))
+
+    def test_failed_workspace_preflight_stops_luna_and_cleans_up(self):
+        copied_workspace = []
+        def denied(*args, **kwargs):
+            copied_workspace.append(args[2])
+            raise RuntimeError("Windows sandbox cannot access Shunt's temporary workspace: Access denied")
+        with patch.object(worker, "find_codex", return_value="fixture.exe"), \
+                patch.object(worker, "ensure_chatgpt_auth"), \
+                patch.object(worker, "prepare_windows_workspace", side_effect=denied), \
+                patch.object(worker.subprocess, "run") as run, \
+                patch.object(worker, "record_worker_run") as record:
+            config = {"source_sharing_acknowledged": True, "worker_model": "gpt-6-luna",
+                      "reasoning_effort": "low", "worker_timeout_seconds": 20, "max_output_chars": 5000}
+            with self.assertRaisesRegex(worker.WorkerError, "Access denied"):
+                worker.run_worker(question="read", selection=self.selection, config=config, task_kind="setup-smoke")
+        run.assert_not_called()
+        self.assertFalse(copied_workspace[0].exists())
+        self.assertEqual(record.call_args.args[0]["status"], "failed")
 
     def test_python_hook_fails_open_without_runtime(self):
         scripts = self.root / "scripts"

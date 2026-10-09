@@ -274,6 +274,7 @@ class WorkerValidationRegressions(unittest.TestCase):
                 return SimpleNamespace(returncode=0, stdout="", stderr="")
             with patch.object(worker, "find_codex", return_value="/fake/codex"), \
                  patch.object(worker, "ensure_chatgpt_auth"), \
+                 patch.object(worker, "prepare_windows_workspace"), \
                  patch.object(worker.subprocess, "run", side_effect=fake_exec), \
                  patch.object(worker, "record_worker_run", side_effect=records.append):
                 with self.assertRaises(worker.WorkerError):

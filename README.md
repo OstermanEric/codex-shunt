@@ -69,8 +69,12 @@ two-line fixture through Luna, and enables routing only after verification.
 Recorded source-sharing acknowledgement is reused when retrying setup. If Luna
 verification fails, Shunt stays installed and routing stays off; the error shows
 the worker's explanation. Resolve that issue and run `shunt setup` again.
-On Windows, the worker keeps your existing Codex sandbox selection while running
-read-only. Complete Codex's sandbox setup if its file reads are blocked; see the
+On Windows, Shunt checks sandbox access before calling Luna. If a private
+temporary folder blocks Codex's legacy sandbox account, Shunt resolves that
+account locally and grants it read access only to the temporary source copy.
+It keeps your selected sandbox and read-only operation; no manual path or folder
+permission changes are needed. If the access check still fails, setup shows the
+cause before calling Luna. Complete or repair Codex's sandbox setup; see the
 [Windows sandbox guide](https://learn.chatgpt.com/docs/windows/windows-sandbox).
 Review and trust the plugin's hook in Codex, then start a new chat. Installed
 plugin users can also invoke `$codex-shunt:setup` without a Terminal command.

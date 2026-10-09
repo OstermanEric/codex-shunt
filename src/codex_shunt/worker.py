@@ -20,6 +20,7 @@ from .config import PLUGIN_ROOT
 from .db import record_worker_run
 from .pricing import MODEL_RATES, credits_for
 from .sources import SourceSelection, collect_sources, copy_to_workspace
+from .windows_workspace import prepare_windows_workspace
 
 
 class WorkerError(RuntimeError):
@@ -206,7 +207,7 @@ def _with_outer_sandbox_hint(detail: str) -> str:
     )
 
 
-def _worker_prompt(question: str, task_kind: str, source_count: int) -> str:
+def _worker_prompt(question: str, task_kind: str, source_count: int, workspace: Path | None = None) -> str:
     shell_hint = ("Use PowerShell Get-Content -LiteralPath to read files; Unix-only commands may be unavailable."
                   if sys.platform == "win32" else "Use the available read-only shell tools to read files.")
     return f"""You are the read-only evidence worker for Codex Shunt.
@@ -215,6 +216,8 @@ Task kind: {task_kind}
 Question: {question}
 
 The current directory is an isolated copy containing {source_count} approved text files.
+Workspace absolute path: {json.dumps(str(workspace)) if workspace else 'the current directory'}.
+Use absolute paths under this workspace if a shell starts in another directory.
 `.codex-shunt-files.txt` lists every approved source file. Analyze only those files.
 Read the manifest and the relevant approved files before answering. {shell_hint}
 
@@ -337,6 +340,18 @@ def run_worker(
             (workspace / ".codex-shunt-files.txt").write_text(manifest, encoding="utf-8")
             result_path = workspace / ".codex-shunt-result.json"
             schema_path = PLUGIN_ROOT / "schemas" / "worker-result.schema.json"
+            environment = os.environ.copy()
+            environment.pop("CODEX_API_KEY", None)
+            environment.pop("OPENAI_API_KEY", None)
+            environment["CODEX_SHUNT_WORKER"] = "1"
+            sandbox_args = _windows_sandbox_args()
+            if sys.platform == "win32":
+                try:
+                    prepare_windows_workspace(codex_command(codex), temporary_root, workspace,
+                                              state_home, environment, sandbox_args,
+                                              deadline=started + int(config["worker_timeout_seconds"]))
+                except RuntimeError as exc:
+                    raise WorkerError(str(exc)) from exc
             command = [
                 *codex_command(codex),
                 "exec",
@@ -360,20 +375,17 @@ def run_worker(
                 f"sqlite_home={json.dumps(str(state_home))}",
                 "-c",
                 f'model_reasoning_effort="{config["reasoning_effort"]}"',
-                *_windows_sandbox_args(),
-                _worker_prompt(question, task_kind, len(selection.files)),
+                *sandbox_args,
+                _worker_prompt(question, task_kind, len(selection.files), workspace),
             ]
-            environment = os.environ.copy()
-            environment.pop("CODEX_API_KEY", None)
-            environment.pop("OPENAI_API_KEY", None)
-            environment["CODEX_SHUNT_WORKER"] = "1"
             completed = subprocess.run(
                 command,
                 capture_output=True,
                 text=True,
                 encoding="utf-8",
-                timeout=int(config["worker_timeout_seconds"]),
+                timeout=max(1, int(config["worker_timeout_seconds"] - (time.monotonic() - started))),
                 env=environment,
+                cwd=workspace,
                 check=False,
             )
             usage = parse_usage(completed.stdout)
