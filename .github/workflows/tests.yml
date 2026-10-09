@@ -39,20 +39,22 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $runtime = Join-Path $env:RUNNER_TEMP 'shunt-codex'
           New-Item -ItemType Directory -Force -Path $runtime | Out-Null
+          $archive = Join-Path $runtime 'codex-x86_64-pc-windows-msvc.exe.zip'
+          Invoke-WebRequest 'https://github.com/openai/codex/releases/download/rust-v0.154.0/codex-x86_64-pc-windows-msvc.exe.zip' -OutFile $archive
+          if ((Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant() -ne '53685f9f6bd171d4bd7d6c2be724fc04f6737a4001eb8471ec59824e5adc8042') { throw 'Codex archive checksum mismatch' }
+          $expanded = Join-Path $runtime 'bundle'
+          Expand-Archive $archive -DestinationPath $expanded
           $assets = @(
-            @{ Name = 'codex-x86_64-pc-windows-msvc.exe.zip'; Target = 'codex.exe'; Hash = '53685f9f6bd171d4bd7d6c2be724fc04f6737a4001eb8471ec59824e5adc8042' },
-            @{ Name = 'codex-command-runner-x86_64-pc-windows-msvc.exe.zip'; Target = 'codex-command-runner.exe'; Hash = 'a727c55ccd186fea958901f404d5f5e9f5d640978df695065915cf1bf6bf65b1' },
-            @{ Name = 'codex-windows-sandbox-setup-x86_64-pc-windows-msvc.exe.zip'; Target = 'codex-windows-sandbox-setup.exe'; Hash = '206d5e7191ae2451ca487bfc414cd851403166bdf1567f547b78da2855ac7a6b' }
+            @{ Name = 'codex-x86_64-pc-windows-msvc.exe'; Target = 'codex.exe' },
+            @{ Name = 'codex-command-runner.exe'; Target = 'codex-command-runner.exe' },
+            @{ Name = 'codex-windows-sandbox-setup.exe'; Target = 'codex-windows-sandbox-setup.exe' }
           )
+          $executables = @(Get-ChildItem $expanded -Recurse -Filter '*.exe' -File)
+          if ($executables.Count -ne $assets.Count) { throw 'Unexpected Codex archive layout' }
           foreach ($asset in $assets) {
-            $archive = Join-Path $runtime $asset.Name
-            Invoke-WebRequest "https://github.com/openai/codex/releases/download/rust-v0.154.0/$($asset.Name)" -OutFile $archive
-            if ((Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant() -ne $asset.Hash) { throw 'Codex archive checksum mismatch' }
-            $expanded = Join-Path $runtime $asset.Target.Replace('.exe', '')
-            Expand-Archive $archive -DestinationPath $expanded
-            $executables = @(Get-ChildItem $expanded -Recurse -Filter '*.exe')
-            if ($executables.Count -ne 1) { throw 'Unexpected Codex archive layout' }
-            Copy-Item $executables[0].FullName (Join-Path $runtime $asset.Target)
+            $source = Join-Path $expanded $asset.Name
+            if (-not (Test-Path $source -PathType Leaf)) { throw 'Missing expected Codex executable' }
+            Copy-Item $source (Join-Path $runtime $asset.Target)
           }
           "CODEX_SHUNT_TEST_CODEX_PATH=$(Join-Path $runtime 'codex.exe')" >> $env:GITHUB_ENV
           'CODEX_SHUNT_TEST_SANDBOX_MODE=unelevated' >> $env:GITHUB_ENV

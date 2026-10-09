@@ -179,13 +179,17 @@ def _read_probe(launcher: SandboxLauncher, workspace: Path, environment: dict[st
     category = next((line[len(marker + ":CATEGORY="):] for line in lines if line.startswith(marker + ":CATEGORY=")), "")
     if marker + ":START" not in lines:
         detail = _diagnostics(result.stderr, result.stdout)
-        # Native numeric error identifiers survive localized Windows messages.
-        denied = bool(re.search(r"\b(?:os error|win32 error)\s*[:(]?\s*5\b", detail, re.IGNORECASE))
+        # PowerShell can resolve its inaccessible cwd on the first cmdlet,
+        # before START is printed. Recognize the stable exception identifier
+        # as well as native error 5; a bootstrap probe must still confirm a
+        # staged-file read outcome before this can request any ACL changes.
+        denied = bool(re.search(r"\b(?:os error|win32 error)\s*[:(]?\s*5\b", detail, re.IGNORECASE)
+                      or re.search(r"\bSystem\.UnauthorizedAccessException\b", detail))
         return ProbeResult("workspace_entry_denied" if denied else "startup_error",
                            result.returncode, detail=detail)
     # Only a failure in our Get-Content operation can request an ACL repair.
     if result.returncode == 43 and "GetContentCommand" in code:
-        if category == "PermissionDenied" or code.split(",")[0] == "UnauthorizedAccess":
+        if category == "PermissionDenied" or code.split(",")[0] in {"UnauthorizedAccess", "System.UnauthorizedAccessException"}:
             return ProbeResult("access_denied", 43, code, "The staged-file read was denied.")
         if category == "ObjectNotFound" or code.split(",")[0] == "PathNotFound":
             return ProbeResult("staging_error", 43, code, "A staged file or manifest is missing.")

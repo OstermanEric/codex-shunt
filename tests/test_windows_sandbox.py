@@ -68,7 +68,11 @@ class CodexWindowsSandboxTests(unittest.TestCase):
         environment.pop("OPENAI_API_KEY", None)
         environment.pop("CODEX_API_KEY", None)
         sandbox_args = ["-c", f'windows.sandbox="{mode}"', "-c", "features.prefer_mxc=false"]
-        with tempfile.TemporaryDirectory(prefix="codex-shunt-real ' 雪 ") as temporary:
+        # Real repository originals are outside the disposable staging root.
+        # Keep this fixture separate so the exact ACL comparison checks that
+        # boundary, including inheritance flags, rather than a staging sibling.
+        with tempfile.TemporaryDirectory(prefix="codex-shunt-originals ") as originals, \
+                tempfile.TemporaryDirectory(prefix="codex-shunt-real ' 雪 ") as temporary:
             root = Path(temporary)
             workspace, state, codex_home = root / "workspace", root / "state", root / "codex-home"
             for path in (workspace, state, codex_home):
@@ -79,7 +83,7 @@ class CodexWindowsSandboxTests(unittest.TestCase):
             source = workspace / "source ' [literal] 雪.txt"
             source.write_text("approved copy\n", encoding="utf-8")
             (workspace / ".codex-shunt-files.txt").write_text(source.name + "\n", encoding="utf-8")
-            original = root / "original.txt"
+            original = Path(originals) / "original.txt"
             original.write_text("original\n")
             original_acl = subprocess.check_output([str(windows._system_directory() / "icacls.exe"), str(original)])
             windows.prepare_windows_workspace([str(codex)], root, workspace, state, environment, sandbox_args)
@@ -92,8 +96,13 @@ class CodexWindowsSandboxTests(unittest.TestCase):
             result = windows._run(launcher.command(workspace, windows.powershell_command(script)),
                                   environment, cwd=workspace)
             self.assertEqual(result.returncode, 43, windows._diagnostics(result.stderr, result.stdout))
-            self.assertIn("SHUNT_WRITE_CATEGORY=PermissionDenied", result.stdout)
-            self.assertIn("SetContentCommand", result.stdout)
+            # Windows PowerShell sometimes categorizes UnauthorizedAccessException
+            # as NotSpecified. Require the actual access exception and cmdlet,
+            # so a script/CLM error cannot falsely pass the denied-write check.
+            codes = [line.removeprefix("SHUNT_WRITE_CODE=") for line in result.stdout.splitlines()
+                     if line.startswith("SHUNT_WRITE_CODE=")]
+            self.assertEqual(len(codes), 1, result.stdout)
+            self.assertRegex(codes[0], r"^(?:UnauthorizedAccess|System\.UnauthorizedAccessException),Microsoft\.PowerShell\.Commands\.SetContentCommand$")
             self.assertEqual(source.read_text(), "approved copy\n")
             self.assertEqual(original.read_text(), "original\n")
             self.assertEqual(original_acl, subprocess.check_output([
@@ -101,6 +110,7 @@ class CodexWindowsSandboxTests(unittest.TestCase):
             self.assertFalse((codex_home / "auth.json").exists())
             print(f"\nReal Codex backend verified: {mode}; no model call or authentication.", flush=True)
         self.assertFalse(root.exists())
+        self.assertFalse(Path(originals).exists())
 
 
 if __name__ == "__main__":
