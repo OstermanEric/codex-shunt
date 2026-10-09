@@ -20,11 +20,15 @@ from .config import PLUGIN_ROOT
 from .db import record_worker_run
 from .pricing import MODEL_RATES, credits_for
 from .sources import SourceSelection, collect_sources, copy_to_workspace
-from .windows_workspace import prepare_windows_workspace
+from .windows_workspace import WorkspaceError, prepare_windows_workspace, read_only_config_args
 
 
 class WorkerError(RuntimeError):
     """Raised when a Luna worker cannot provide a valid result."""
+
+    def __init__(self, message: str, *, stage: str | None = None):
+        super().__init__(message)
+        self.stage = stage
 
 
 def ensure_source_sharing_acknowledged(config: dict[str, Any]) -> None:
@@ -351,7 +355,9 @@ def run_worker(
                                               state_home, environment, sandbox_args,
                                               deadline=started + int(config["worker_timeout_seconds"]))
                 except RuntimeError as exc:
-                    raise WorkerError(str(exc)) from exc
+                    if isinstance(exc, WorkspaceError):
+                        error_type = "windows_preflight_" + exc.category
+                    raise WorkerError(str(exc), stage="windows-preflight") from exc
             command = [
                 *codex_command(codex),
                 "exec",
@@ -359,8 +365,6 @@ def run_worker(
                 "--ephemeral",
                 "--ignore-user-config",
                 "--skip-git-repo-check",
-                "--disable",
-                "hooks",
                 "--model",
                 worker_model,
                 "--sandbox",
@@ -371,11 +375,9 @@ def run_worker(
                 str(result_path),
                 "-C",
                 str(workspace),
-                "-c",
-                f"sqlite_home={json.dumps(str(state_home))}",
+                *read_only_config_args(sandbox_args, state_home),
                 "-c",
                 f'model_reasoning_effort="{config["reasoning_effort"]}"',
-                *sandbox_args,
                 _worker_prompt(question, task_kind, len(selection.files), workspace),
             ]
             completed = subprocess.run(

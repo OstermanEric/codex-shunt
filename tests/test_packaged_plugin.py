@@ -17,6 +17,8 @@ PLUGIN_ROOT = Path(__file__).resolve().parents[1]
 class PackagedPluginTests(unittest.TestCase):
     def test_distribution_metadata_assets_and_setup_binding_are_complete(self) -> None:
         manifest = json.loads((PLUGIN_ROOT / ".codex-plugin/plugin.json").read_text())
+        runtime = (PLUGIN_ROOT / "src/codex_shunt/__init__.py").read_text()
+        self.assertIn(f'__version__ = "{manifest["version"]}"', runtime)
         interface = manifest["interface"]
         self.assertLessEqual(len(interface["shortDescription"]), 30)
         self.assertLessEqual(len(interface["defaultPrompt"]), 3)

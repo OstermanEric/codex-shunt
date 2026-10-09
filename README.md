@@ -69,12 +69,15 @@ two-line fixture through Luna, and enables routing only after verification.
 Recorded source-sharing acknowledgement is reused when retrying setup. If Luna
 verification fails, Shunt stays installed and routing stays off; the error shows
 the worker's explanation. Resolve that issue and run `shunt setup` again.
-On Windows, Shunt checks sandbox access before calling Luna. If a private
-temporary folder blocks Codex's legacy sandbox account, Shunt resolves that
-account locally and grants it read access only to the temporary source copy.
-It keeps your selected sandbox and read-only operation; no manual path or folder
-permission changes are needed. If the access check still fails, setup shows the
-cause before calling Luna. Complete or repair Codex's sandbox setup; see the
+On Windows, Shunt checks sandbox access before calling Luna using a probe that
+works in PowerShell Constrained Language Mode. For confirmed read or workspace
+entry failures, it observes the actual sandbox user and grants scoped read access
+to the temporary source copy, then verifies the read again. It keeps private
+staging, your selected sandbox, managed requirements, and read-only operation;
+original files and their permissions are untouched. Unelevated operation does
+not require the elevated sandbox's setup marker. Setup distinguishes script,
+staging, startup, access, and timeout failures and reports when Luna was not
+started. Follow the specific error, then retry `shunt setup`; see the
 [Windows sandbox guide](https://learn.chatgpt.com/docs/windows/windows-sandbox).
 Review and trust the plugin's hook in Codex, then start a new chat. Installed
 plugin users can also invoke `$codex-shunt:setup` without a Terminal command.
@@ -315,6 +318,15 @@ python3 -m compileall -q src
 On Windows, use `py -3` in place of `python3`. CI runs the suite on macOS,
 Linux, and Windows, including the PowerShell installer and hook on Windows.
 Windows coverage also includes Python 3.14.
+CI executes real PowerShell Constrained Language Mode and credential-free
+unelevated sandbox checks with Codex CLI 0.154.0. These checks verify copied-file
+reads, denied writes, original-file preservation, and cleanup. Elevated and MXC
+require separately provisioned hosts; a skipped backend is not a verified pass.
+On such a Windows host, set `CODEX_SHUNT_TEST_CODEX_PATH` to the native CLI and
+`CODEX_SHUNT_TEST_SANDBOX_MODE` to `elevated` or `mxc`, then run
+`py -3 -m unittest discover -s tests -p test_windows_sandbox.py -v`.
+Actual subscription-authenticated Luna citations and hook trust still need a
+setup check on the affected PC. Version **0.2.1** contains this preflight fix.
 
 After updating an installed plugin, reinstall/refresh it and start a new chat.
 Changed hook definitions require another trust review. Removed commands from

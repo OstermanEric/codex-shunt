@@ -205,8 +205,10 @@ def command_setup(args: argparse.Namespace) -> int:
                     task_kind="setup-smoke",
                 )
             except WorkerError as exc:
+                failure = ("Windows workspace verification failed. Luna was not started."
+                           if exc.stage == "windows-preflight" else "Luna verification failed.")
                 raise WorkerError(
-                    "Shunt is installed, but Luna verification failed. Automatic routing remains off.\n"
+                    f"Shunt is installed, but {failure} Automatic routing remains off.\n"
                     f"{exc}\nResolve the reported issue, then run `shunt setup`; reinstalling is unnecessary."
                 ) from exc
         if (outcome.result.get("needs_escalation") or outcome.citation_count < 1

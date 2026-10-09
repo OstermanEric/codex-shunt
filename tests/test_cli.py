@@ -113,6 +113,19 @@ class SetupTests(unittest.TestCase):
             self.assertIn("No cited evidence", str(raised.exception))
             self.assertFalse(load_config()["strict_routing"])
 
+    def test_preflight_failure_reports_that_luna_did_not_start(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary, \
+                patch.dict(os.environ, {"CODEX_SHUNT_DATA_DIR": temporary}), \
+                patch("codex_shunt.cli._doctor_checks", return_value=[{"name": "ready", "ok": True, "detail": "ready"}]), \
+                patch("codex_shunt.cli.run_worker", side_effect=WorkerError("Probe incompatibility", stage="windows-preflight")), \
+                redirect_stdout(io.StringIO()):
+            with self.assertRaises(WorkerError) as raised:
+                command_setup(build_parser().parse_args(["setup", "--accept-source-sharing"]))
+            self.assertIn("Windows workspace verification failed", str(raised.exception))
+            self.assertIn("Luna was not started", str(raised.exception))
+            self.assertNotIn("Luna verification failed", str(raised.exception))
+            self.assertFalse(load_config()["strict_routing"])
+
 
 
 
