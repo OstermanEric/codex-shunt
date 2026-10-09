@@ -98,6 +98,20 @@ class WindowsWorkspaceTests(unittest.TestCase):
         identity.assert_not_called()
         grant.assert_not_called()
 
+    def test_bootstrap_script_or_policy_failure_never_changes_permissions(self):
+        for status in ("startup_error", "probe_error", "staging_error", "timeout"):
+            with self.subTest(status=status), \
+                    patch.object(windows, "sandbox_command", return_value=self.launcher), \
+                    patch.object(windows, "_read_probe", side_effect=[
+                        windows.ProbeResult("workspace_entry_denied"), windows.ProbeResult(status)]), \
+                    patch.object(windows, "_sandbox_user_sid") as identity, \
+                    patch.object(windows, "_grant_source_read") as grant:
+                with self.assertRaises(windows.WorkspaceError) as raised:
+                    self.prepare()
+                self.assertEqual(raised.exception.category, status)
+                identity.assert_not_called()
+                grant.assert_not_called()
+
     def test_repair_must_pass_a_second_probe(self):
         with patch.object(windows, "sandbox_command", return_value=self.launcher), \
                 patch.object(windows, "_read_probe", return_value=windows.ProbeResult("access_denied")), \
@@ -219,6 +233,19 @@ class WindowsWorkspaceTests(unittest.TestCase):
     def test_unrelated_success_marker_is_not_accepted(self):
         with patch.object(windows, "_run", return_value=subprocess.CompletedProcess([], 0, "SHUNT_other:START\nSHUNT_other:OK", "")):
             self.assertEqual(windows._read_probe(self.launcher, self.workspace, self.environment).status, "startup_error")
+
+    def test_pre_marker_cwd_exception_requires_bootstrap_confirmation(self):
+        for diagnostic, status in [
+            ("Native launch failed (os error 5)", "workspace_entry_denied"),
+            ("Localized message\n    + FullyQualifiedErrorId : System.UnauthorizedAccessException\n",
+             "workspace_entry_denied"),
+            ('#< CLIXML\n<Objs><S S="Error">System.UnauthorizedAccessException_x000D__x000A_</S></Objs>',
+             "workspace_entry_denied"),
+            ("Access denied by startup policy", "startup_error"),
+        ]:
+            with self.subTest(diagnostic=diagnostic), patch.object(windows, "_run",
+                    return_value=subprocess.CompletedProcess([], 1, "", diagnostic)):
+                self.assertEqual(windows._read_probe(self.launcher, self.workspace, self.environment).status, status)
 
     def test_clixml_preserves_errors_discards_progress_and_bounds_malformed_data(self):
         output = '#< CLIXML\n<Objs xmlns="http://schemas.microsoft.com/powershell/2004/04"><Obj S="progress"><S>noise</S></Obj><S S="Error">CannotCreateTypeConstrainedLanguage_x000D__x000A_failure</S></Objs>'
