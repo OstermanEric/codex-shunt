@@ -1,4 +1,4 @@
-"""Windows preflight recovery and real kernel-enforced temporary-copy ACLs."""
+"""Windows preflight regressions and real kernel-enforced temporary-copy ACLs."""
 
 import base64
 import json
@@ -6,6 +6,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -19,106 +20,211 @@ class WindowsWorkspaceTests(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory(prefix="shunt ' space ")
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
-        self.workspace = self.root / "workspace"
-        self.state = self.root / "state"
+        self.workspace, self.state = self.root / "workspace", self.root / "state"
         self.workspace.mkdir()
         self.state.mkdir()
+        (self.workspace / "source.txt").write_text("do not expose this source\n")
+        (self.workspace / ".codex-shunt-files.txt").write_text("source.txt\n")
         self.environment = {"CODEX_HOME": str(self.root / "custom codex home")}
+        self.launcher = windows.SandboxLauncher(("sandbox",), False)
+        self.system = self.root / "system"
+        self.system.mkdir()
+        self.system_patch = patch.object(windows, "_system_directory", return_value=self.system)
+        self.system_patch.start()
+        self.addCleanup(self.system_patch.stop)
 
     def prepare(self):
         windows.prepare_windows_workspace(["codex.exe"], self.root, self.workspace,
-                                          self.state, self.environment, ["-c", 'windows.sandbox="elevated"'])
+                                          self.state, self.environment, ["-c", 'windows.sandbox="unelevated"'])
 
     def test_readable_sandbox_needs_no_identity_lookup_or_acl_changes(self):
-        with patch.object(windows, "sandbox_command", return_value=["sandbox"]), \
-                patch.object(windows, "_read_probe", return_value=(True, "")), \
-                patch.object(windows, "_offline_sandbox_sid") as identity, \
+        with patch.object(windows, "sandbox_command", return_value=self.launcher), \
+                patch.object(windows, "_read_probe", return_value=windows.ProbeResult("readable")), \
+                patch.object(windows, "_sandbox_user_sid") as identity, \
                 patch.object(windows, "_grant_source_read") as grant:
             self.prepare()
         identity.assert_not_called()
         grant.assert_not_called()
 
-    def test_denied_read_gets_scoped_repair_and_must_pass_a_second_probe(self):
-        with patch.object(windows, "sandbox_command", return_value=["sandbox"]), \
-                patch.object(windows, "_read_probe", side_effect=[(False, "Access denied"), (True, "")]) as probe, \
-                patch.object(windows, "_offline_sandbox_sid", return_value="resolved-sid"), \
+    def test_unelevated_denial_uses_observed_identity_without_setup_marker(self):
+        with patch.object(windows, "sandbox_command", return_value=self.launcher), \
+                patch.object(windows, "_read_probe", side_effect=[windows.ProbeResult("access_denied"),
+                                                                 windows.ProbeResult("readable")]) as probe, \
+                patch.object(windows, "_sandbox_user_sid", return_value="S-1-12-1-1-2-3-4") as identity, \
                 patch.object(windows, "_grant_source_read") as grant:
             self.prepare()
-        grant.assert_called_once()
-        self.assertEqual(grant.call_args.args, (self.root, self.workspace, "resolved-sid", self.environment))
+        self.assertFalse((Path(self.environment["CODEX_HOME"]) / ".sandbox/setup_marker.json").exists())
+        identity.assert_called_once()
+        self.assertEqual(identity.call_args.args[1], self.system)
+        self.assertEqual(grant.call_args.args, (self.root, self.workspace, "S-1-12-1-1-2-3-4", self.environment))
         self.assertEqual(probe.call_count, 2)
 
-    def test_blocked_managed_policy_still_fails_after_read_grant(self):
-        with patch.object(windows, "sandbox_command", return_value=["sandbox"]), \
-                patch.object(windows, "_read_probe", return_value=(False, "Managed restriction denies reads")), \
-                patch.object(windows, "_offline_sandbox_sid", return_value="resolved-sid"), \
-                patch.object(windows, "_grant_source_read"):
-            with self.assertRaisesRegex(RuntimeError, "Managed restriction denies reads"):
+    def test_workspace_entry_failure_bootstraps_and_rechecks_actual_workspace(self):
+        for bootstrap_status in ("readable", "access_denied"):
+            with self.subTest(bootstrap_status=bootstrap_status), \
+                    patch.object(windows, "sandbox_command", return_value=self.launcher), \
+                    patch.object(windows, "_read_probe", side_effect=[
+                        windows.ProbeResult("workspace_entry_denied"), windows.ProbeResult(bootstrap_status),
+                        windows.ProbeResult("readable")]) as probe, \
+                    patch.object(windows, "_sandbox_user_sid", return_value="S-1-5-21-1-2-3-4"), \
+                    patch.object(windows, "_grant_source_read") as grant:
                 self.prepare()
+            self.assertEqual(probe.call_args_list[1].kwargs["cwd"], self.system)
+            self.assertNotIn("cwd", probe.call_args_list[2].kwargs)
+            grant.assert_called_once()
 
-    def test_missing_identity_preserves_actual_read_failure(self):
-        with patch.object(windows, "sandbox_command", return_value=["sandbox"]), \
-                patch.object(windows, "_read_probe", return_value=(False, "Access denied")), \
+    def test_probe_staging_timeout_and_policy_failures_never_request_acl_repair(self):
+        for status in ("probe_error", "staging_error", "timeout", "startup_error"):
+            with self.subTest(status=status), \
+                    patch.object(windows, "sandbox_command", return_value=self.launcher), \
+                    patch.object(windows, "_read_probe", return_value=windows.ProbeResult(status)), \
+                    patch.object(windows, "_sandbox_user_sid") as identity, \
+                    patch.object(windows, "_grant_source_read") as grant:
+                with self.assertRaises(windows.WorkspaceError) as raised:
+                    self.prepare()
+                self.assertEqual(raised.exception.category, status)
+                identity.assert_not_called()
+                grant.assert_not_called()
+
+    def test_generic_startup_failure_never_enters_permission_repair(self):
+        with patch.object(windows, "sandbox_command", return_value=self.launcher), \
+                patch.object(windows, "_read_probe", side_effect=[windows.ProbeResult("startup_error"),
+                                                                 windows.ProbeResult("readable")]) as probe, \
+                patch.object(windows, "_sandbox_user_sid") as identity, \
                 patch.object(windows, "_grant_source_read") as grant:
-            with self.assertRaisesRegex(RuntimeError, "Access denied"):
+            with self.assertRaises(windows.WorkspaceError):
                 self.prepare()
+        self.assertEqual(probe.call_count, 1)
+        identity.assert_not_called()
         grant.assert_not_called()
 
-    def test_preflight_timeout_is_actionable(self):
-        with patch.object(windows, "sandbox_command", side_effect=subprocess.TimeoutExpired("codex", 30)):
-            with self.assertRaisesRegex(RuntimeError, "Windows sandbox cannot access.*shunt setup"):
+    def test_repair_must_pass_a_second_probe(self):
+        with patch.object(windows, "sandbox_command", return_value=self.launcher), \
+                patch.object(windows, "_read_probe", return_value=windows.ProbeResult("access_denied")), \
+                patch.object(windows, "_sandbox_user_sid", return_value="S-1-5-21-1-2-3-4"), \
+                patch.object(windows, "_grant_source_read"):
+            with self.assertRaises(windows.WorkspaceError) as raised:
                 self.prepare()
+        self.assertEqual(raised.exception.category, "access_denied")
 
-    def test_old_and_current_cli_keep_read_only_and_saved_backend(self):
-        for help_text, platform in [("Commands:\n  windows  Run native sandbox\n", ["windows"]),
-                                    ("Usage: codex sandbox [COMMAND]...", [])]:
-            with patch.object(windows, "_run", return_value=subprocess.CompletedProcess([], 0, help_text, "")):
-                command = windows.sandbox_command(["codex.exe"], ["-c", 'windows.sandbox="elevated"'],
-                                                  self.state, self.environment)
-            self.assertEqual(command[command.index("sandbox") + 1:], [*platform, "--"])
+    def test_missing_manifest_and_escaping_or_linked_files_never_change_acl(self):
+        manifest = self.workspace / ".codex-shunt-files.txt"
+        for name in ("../state/private.txt", "C:/original.txt", "/original.txt", "missing.txt", ""):
+            with self.subTest(name=name), patch.object(windows, "_run") as run:
+                manifest.write_text(name)
+                with self.assertRaises(windows.WorkspaceError):
+                    windows._grant_source_read(self.root, self.workspace, "S-1-5-21-1-2-3-4", self.environment)
+                run.assert_not_called()
+        manifest.unlink()
+        with patch.object(windows, "_run") as run, self.assertRaises(windows.WorkspaceError):
+            self.prepare()
+        run.assert_not_called()
+
+    @unittest.skipIf(os.name == "nt", "Windows reparse-point coverage is in the native sandbox suite")
+    def test_staging_link_cannot_redirect_recursive_grant(self):
+        (self.workspace / "redirect").symlink_to(self.state, target_is_directory=True)
+        with patch.object(windows, "_run") as run, self.assertRaises(windows.WorkspaceError):
+            windows._grant_source_read(self.root, self.workspace, "S-1-5-21-1-2-3-4", self.environment)
+        run.assert_not_called()
+
+    def test_shared_deadline_stops_before_launching_a_command(self):
+        with patch.object(windows.subprocess, "run") as run:
+            with self.assertRaises(subprocess.TimeoutExpired):
+                windows._run(["sandbox"], self.environment, deadline=time.monotonic() - 1)
+        run.assert_not_called()
+        with patch.object(windows, "sandbox_command", side_effect=subprocess.TimeoutExpired("codex", 30)):
+            with self.assertRaises(windows.WorkspaceError) as raised:
+                self.prepare()
+        self.assertEqual(raised.exception.category, "timeout")
+
+    def test_old_and_current_cli_keep_read_only_and_managed_requirements(self):
+        cases = [
+            (["Commands:\n  windows  Run native sandbox\n", "Usage: codex sandbox windows [COMMAND]..."], ["windows"]),
+            (["Usage: codex sandbox [COMMAND]... --permission-profile --include-managed-config --cd"], []),
+        ]
+        for help_texts, platform in cases:
+            with self.subTest(platform=platform), patch.object(windows, "_run", side_effect=[
+                    subprocess.CompletedProcess([], 0, text, "") for text in help_texts]):
+                launcher = windows.sandbox_command(["codex.exe"], ["-c", 'windows.sandbox="elevated"'],
+                                                   self.state, self.environment)
+            command = launcher.command(self.workspace, ["whoami.exe"])
             self.assertIn('sandbox_mode="read-only"', command)
             self.assertIn('approval_policy="never"', command)
             self.assertIn('windows.sandbox="elevated"', command)
             self.assertNotIn("--dangerously-bypass-approvals-and-sandbox", command)
+            self.assertEqual(command[command.index("sandbox") + 1:][:len(platform)], platform)
+            if not platform:
+                self.assertIn("--include-managed-config", command)
+                self.assertEqual(command[command.index("--permission-profile") + 1], ":read-only")
+                self.assertEqual(command[command.index("-C") + 1], str(self.workspace))
 
-    def test_identity_uses_custom_codex_home_and_resolves_the_local_account(self):
-        marker = Path(self.environment["CODEX_HOME"]) / ".sandbox" / "setup_marker.json"
-        marker.parent.mkdir(parents=True)
-        marker.write_text(json.dumps({"offline_username": "dynamic_offline_user"}))
-        sid = "S-1-5-21-123-456-789-1001"
-        with patch.object(windows, "_run", return_value=subprocess.CompletedProcess([], 0, sid, "")) as run:
-            self.assertEqual(windows._offline_sandbox_sid(self.environment), sid)
-        script = base64.b64decode(run.call_args.args[0][-1]).decode("utf-16-le")
-        self.assertIn("$env:COMPUTERNAME", script)
-        self.assertIn("'dynamic_offline_user'", script)
-        for broad_sid in ["S-1-1-0", "S-1-5-11", "S-1-5-32-545"]:
-            with patch.object(windows, "_run", return_value=subprocess.CompletedProcess([], 0, broad_sid, "")):
-                with self.assertRaises(RuntimeError):
-                    windows._offline_sandbox_sid(self.environment)
+    def test_profile_cli_without_managed_support_fails_closed(self):
+        with patch.object(windows, "_run", return_value=subprocess.CompletedProcess([], 0, "--permission-profile", "")):
+            with self.assertRaisesRegex(windows.WorkspaceError, "managed requirements"):
+                windows.sandbox_command(["codex.exe"], [], self.state, self.environment)
+
+    def test_observed_identity_accepts_local_domain_and_cloud_users_only(self):
+        for sid in ("S-1-5-21-123-456-789-1001", "S-1-12-1-123-456-789-1001"):
+            with patch.object(windows, "_run", return_value=subprocess.CompletedProcess([], 0, f'"domain,user","{sid}"\n', "")) as run:
+                self.assertEqual(windows._sandbox_user_sid(self.launcher, self.system, self.environment), sid)
+            command = run.call_args.args[0]
+            self.assertEqual(command[-5:], [str(self.system / "whoami.exe"), "/user", "/fo", "csv", "/nh"])
+            self.assertEqual(run.call_args.kwargs["cwd"], self.system)
+        for output in ('"user","S-1-1-0"', '"user","S-1-5-11"', '"user","S-1-5-32-545"',
+                       '"user","S-1-5-21-1-2-3-4"\n"other","S-1-5-21-1-2-3-5"', "garbage"):
+            with self.subTest(output=output), patch.object(windows, "_run",
+                    return_value=subprocess.CompletedProcess([], 0, output, "")):
+                with self.assertRaises(windows.WorkspaceError):
+                    windows._sandbox_user_sid(self.launcher, self.system, self.environment)
 
     def test_acl_grants_touch_only_temporary_copy_and_do_not_inherit_to_state(self):
         sid = "S-1-5-21-123-456-789-1001"
         with patch.object(windows, "_run", return_value=subprocess.CompletedProcess([], 0, "", "")) as run:
             windows._grant_source_read(self.root, self.workspace, sid, self.environment)
-        commands = [call.args[0] for call in run.call_args_list]
-        self.assertEqual(commands, [
-            ["icacls.exe", str(self.root), "/grant", f"*{sid}:(X)", "/Q"],
-            ["icacls.exe", str(self.workspace), "/grant", f"*{sid}:(OI)(CI)(RX)", "/T", "/Q"],
+        self.assertEqual([call.args[0] for call in run.call_args_list], [
+            [str(self.system / "icacls.exe"), str(self.root), "/grant", f"*{sid}:(X)", "/Q"],
+            [str(self.system / "icacls.exe"), str(self.workspace), "/grant", f"*{sid}:(OI)(CI)(RX)", "/T", "/Q"],
         ])
 
-    def test_probe_uses_literal_absolute_paths_and_does_not_return_source_text(self):
+    def test_probe_preserves_literal_unicode_paths_and_never_prints_source_text(self):
+        workspace = self.root / "space ' [literal] 雪"
         def run(command, environment, **kwargs):
             script = base64.b64decode(command[-1]).decode("utf-16-le")
-            self.assertIn(windows._literal(str(self.workspace)), script)
+            self.assertIn(windows._literal(str(workspace)), script)
             self.assertIn("-LiteralPath", script)
             self.assertIn("| Out-Null", script)
-            self.assertEqual(kwargs["cwd"], self.workspace)
-            marker = script.split("Write-Output '")[1].split("'")[0]
-            return subprocess.CompletedProcess(command, 0, marker + "\n", "")
+            self.assertNotIn("[Console]", script)
+            self.assertNotIn("::new", script)
+            marker = script.split("Write-Output '")[1].split(":START'")[0]
+            return subprocess.CompletedProcess(command, 0, marker + ":START\n" + marker + ":OK\n", "")
         with patch.object(windows, "_run", side_effect=run):
-            self.assertTrue(windows._read_probe(["sandbox", "--"], self.workspace, self.environment)[0])
+            self.assertEqual(windows._read_probe(self.launcher, workspace, self.environment).status, "readable")
 
+    def test_probe_classifies_nonce_bound_errors_without_english_message_matching(self):
+        for code, category, status in [
+            ("UnauthorizedAccess,Microsoft.PowerShell.Commands.GetContentCommand", "PermissionDenied", "access_denied"),
+            ("PathNotFound,Microsoft.PowerShell.Commands.GetContentCommand", "ObjectNotFound", "staging_error"),
+            ("MethodInvocationNotSupportedInConstrainedLanguage", "InvalidOperation", "probe_error"),
+        ]:
+            def run(command, environment, **kwargs):
+                script = base64.b64decode(command[-1]).decode("utf-16-le")
+                marker = script.split("Write-Output '")[1].split(":START'")[0]
+                output = f"{marker}:START\n{marker}:CODE={code}\n{marker}:CATEGORY={category}\n"
+                return subprocess.CompletedProcess(command, 43, output, "")
+            with self.subTest(code=code), patch.object(windows, "_run", side_effect=run):
+                result = windows._read_probe(self.launcher, self.workspace, self.environment)
+                self.assertEqual(result.status, status)
+                self.assertEqual(result.error_code, code)
 
+    def test_unrelated_success_marker_is_not_accepted(self):
+        with patch.object(windows, "_run", return_value=subprocess.CompletedProcess([], 0, "SHUNT_other:START\nSHUNT_other:OK", "")):
+            self.assertEqual(windows._read_probe(self.launcher, self.workspace, self.environment).status, "startup_error")
+
+    def test_clixml_preserves_errors_discards_progress_and_bounds_malformed_data(self):
+        output = '#< CLIXML\n<Objs xmlns="http://schemas.microsoft.com/powershell/2004/04"><Obj S="progress"><S>noise</S></Obj><S S="Error">CannotCreateTypeConstrainedLanguage_x000D__x000A_failure</S></Objs>'
+        self.assertEqual(windows._diagnostics(output), "CannotCreateTypeConstrainedLanguage\r\nfailure")
+        self.assertNotIn("<Objs", windows._diagnostics("<Objs broken"))
+        self.assertLessEqual(len(windows._diagnostics("x" * 2000)), 1200)
 @unittest.skipUnless(sys.platform == "win32", "real Windows ACL and restricted-token checks")
 class NativeWindowsAclTests(unittest.TestCase):
     def test_private_copy_becomes_readable_but_writes_state_and_originals_stay_denied(self):

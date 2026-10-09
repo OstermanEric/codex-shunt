@@ -128,7 +128,9 @@ class WindowsReadTests(unittest.TestCase):
         codex_home = self.root / "codex home"
         codex_home.mkdir()
         (codex_home / "config.toml").write_text('[windows]\nsandbox="elevated"\n')
+        commands = []
         def execute(command, **kwargs):
+            commands.append(command)
             self.assertEqual(command[command.index("--sandbox") + 1], "read-only")
             self.assertIn('--ignore-user-config', command)
             self.assertIn('windows.sandbox="elevated"', command)
@@ -149,6 +151,9 @@ class WindowsReadTests(unittest.TestCase):
             outcome = worker.run_worker(question="read the file", selection=self.selection, config=config, task_kind="setup-smoke")
         self.assertTrue(outcome.result["needs_escalation"])
         prepare.assert_called_once()
+        common = worker.read_only_config_args(prepare.call_args.args[5], prepare.call_args.args[3])
+        start = commands[0].index(common[0])
+        self.assertEqual(commands[0][start:start + len(common)], common)
         self.assertNotIn("OPENAI_API_KEY", prepare.call_args.args[4])
         self.assertEqual(outcome.valid_citation_count, 0)
         self.assertEqual(record.call_args.args[0]["status"], "escalated")
@@ -171,6 +176,22 @@ class WindowsReadTests(unittest.TestCase):
         run.assert_not_called()
         self.assertFalse(copied_workspace[0].exists())
         self.assertEqual(record.call_args.args[0]["status"], "failed")
+
+    def test_preflight_error_category_reaches_telemetry_without_diagnostic_contents(self):
+        failure = worker.WorkspaceError("probe_error", "CannotCreateTypeConstrainedLanguage")
+        with patch.object(worker, "find_codex", return_value="fixture.exe"), \
+                patch.object(worker, "ensure_chatgpt_auth"), \
+                patch.object(worker, "prepare_windows_workspace", side_effect=failure), \
+                patch.object(worker.subprocess, "run") as run, \
+                patch.object(worker, "record_worker_run") as record:
+            config = {"source_sharing_acknowledged": True, "worker_model": "gpt-6-luna",
+                      "reasoning_effort": "low", "worker_timeout_seconds": 20, "max_output_chars": 5000}
+            with self.assertRaises(worker.WorkerError) as raised:
+                worker.run_worker(question="read", selection=self.selection, config=config, task_kind="setup-smoke")
+        self.assertEqual(raised.exception.stage, "windows-preflight")
+        self.assertEqual(record.call_args.args[0]["error_type"], "windows_preflight_probe_error")
+        self.assertNotIn("ConstrainedLanguage", json.dumps(record.call_args.args[0]))
+        run.assert_not_called()
 
     def test_python_hook_fails_open_without_runtime(self):
         scripts = self.root / "scripts"

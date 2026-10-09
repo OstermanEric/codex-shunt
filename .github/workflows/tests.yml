@@ -22,3 +22,40 @@ jobs:
           python-version: ${{ matrix.python }}
       - run: python -m unittest discover -s tests -v
       - run: python -m compileall -q src
+  windows-sandbox:
+    name: Real Windows sandbox (unelevated, Codex 0.154.0)
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.14'
+      - name: Install pinned Codex and sandbox helpers
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $runtime = Join-Path $env:RUNNER_TEMP 'shunt-codex'
+          New-Item -ItemType Directory -Force -Path $runtime | Out-Null
+          $assets = @(
+            @{ Name = 'codex-x86_64-pc-windows-msvc.exe.zip'; Target = 'codex.exe'; Hash = '53685f9f6bd171d4bd7d6c2be724fc04f6737a4001eb8471ec59824e5adc8042' },
+            @{ Name = 'codex-command-runner-x86_64-pc-windows-msvc.exe.zip'; Target = 'codex-command-runner.exe'; Hash = 'a727c55ccd186fea958901f404d5f5e9f5d640978df695065915cf1bf6bf65b1' },
+            @{ Name = 'codex-windows-sandbox-setup-x86_64-pc-windows-msvc.exe.zip'; Target = 'codex-windows-sandbox-setup.exe'; Hash = '206d5e7191ae2451ca487bfc414cd851403166bdf1567f547b78da2855ac7a6b' }
+          )
+          foreach ($asset in $assets) {
+            $archive = Join-Path $runtime $asset.Name
+            Invoke-WebRequest "https://github.com/openai/codex/releases/download/rust-v0.154.0/$($asset.Name)" -OutFile $archive
+            if ((Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant() -ne $asset.Hash) { throw 'Codex archive checksum mismatch' }
+            $expanded = Join-Path $runtime $asset.Target.Replace('.exe', '')
+            Expand-Archive $archive -DestinationPath $expanded
+            $executables = @(Get-ChildItem $expanded -Recurse -Filter '*.exe')
+            if ($executables.Count -ne 1) { throw 'Unexpected Codex archive layout' }
+            Copy-Item $executables[0].FullName (Join-Path $runtime $asset.Target)
+          }
+          "CODEX_SHUNT_TEST_CODEX_PATH=$(Join-Path $runtime 'codex.exe')" >> $env:GITHUB_ENV
+          'CODEX_SHUNT_TEST_SANDBOX_MODE=unelevated' >> $env:GITHUB_ENV
+          Write-Output 'Testing unelevated; elevated and MXC are not provisioned on this runner.'
+      - name: Exercise real CLM and read-only sandbox without authentication
+        run: python -m unittest discover -s tests -p test_windows_sandbox.py -v
