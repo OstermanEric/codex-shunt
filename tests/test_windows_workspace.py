@@ -217,6 +217,7 @@ class WindowsWorkspaceTests(unittest.TestCase):
     def test_probe_classifies_nonce_bound_errors_without_english_message_matching(self):
         for code, category, status in [
             ("UnauthorizedAccess,Microsoft.PowerShell.Commands.GetContentCommand", "PermissionDenied", "access_denied"),
+            ("System.UnauthorizedAccessException,Microsoft.PowerShell.Commands.GetContentCommand", "NotSpecified", "access_denied"),
             ("PathNotFound,Microsoft.PowerShell.Commands.GetContentCommand", "ObjectNotFound", "staging_error"),
             ("MethodInvocationNotSupportedInConstrainedLanguage", "InvalidOperation", "probe_error"),
         ]:

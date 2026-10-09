@@ -92,8 +92,13 @@ class CodexWindowsSandboxTests(unittest.TestCase):
             result = windows._run(launcher.command(workspace, windows.powershell_command(script)),
                                   environment, cwd=workspace)
             self.assertEqual(result.returncode, 43, windows._diagnostics(result.stderr, result.stdout))
-            self.assertIn("SHUNT_WRITE_CATEGORY=PermissionDenied", result.stdout)
-            self.assertIn("SetContentCommand", result.stdout)
+            # Windows PowerShell sometimes categorizes UnauthorizedAccessException
+            # as NotSpecified. Require the actual access exception and cmdlet,
+            # so a script/CLM error cannot falsely pass the denied-write check.
+            codes = [line.removeprefix("SHUNT_WRITE_CODE=") for line in result.stdout.splitlines()
+                     if line.startswith("SHUNT_WRITE_CODE=")]
+            self.assertEqual(len(codes), 1, result.stdout)
+            self.assertRegex(codes[0], r"^(?:UnauthorizedAccess|System\.UnauthorizedAccessException),Microsoft\.PowerShell\.Commands\.SetContentCommand$")
             self.assertEqual(source.read_text(), "approved copy\n")
             self.assertEqual(original.read_text(), "original\n")
             self.assertEqual(original_acl, subprocess.check_output([

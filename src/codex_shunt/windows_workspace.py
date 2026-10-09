@@ -189,7 +189,7 @@ def _read_probe(launcher: SandboxLauncher, workspace: Path, environment: dict[st
                            result.returncode, detail=detail)
     # Only a failure in our Get-Content operation can request an ACL repair.
     if result.returncode == 43 and "GetContentCommand" in code:
-        if category == "PermissionDenied" or code.split(",")[0] == "UnauthorizedAccess":
+        if category == "PermissionDenied" or code.split(",")[0] in {"UnauthorizedAccess", "System.UnauthorizedAccessException"}:
             return ProbeResult("access_denied", 43, code, "The staged-file read was denied.")
         if category == "ObjectNotFound" or code.split(",")[0] == "PathNotFound":
             return ProbeResult("staging_error", 43, code, "A staged file or manifest is missing.")
