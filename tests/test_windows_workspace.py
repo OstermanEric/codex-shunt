@@ -143,7 +143,10 @@ class NativeWindowsAclTests(unittest.TestCase):
                                       wt.DWORD, wt.DWORD, wt.HANDLE]
         kernel.CreateFileW.restype = wt.HANDLE
         token, restricted, sid_pointer = wt.HANDLE(), wt.HANDLE(), ctypes.c_void_p()
-        sid = "S-1-5-21-123-456-789-1001"  # Synthetic capability; no Windows account is created.
+        # icacls requires a registered principal. Use the existing Guests group
+        # only as this synthetic token's restricting SID; no account is created
+        # or logged into, and only disposable fixture files receive its read ACE.
+        sid = "S-1-5-32-546"
         try:
             self.assertTrue(advapi.OpenProcessToken(kernel.GetCurrentProcess(), 0xE, ctypes.byref(token)))
             self.assertTrue(advapi.ConvertStringSidToSidW(sid, ctypes.byref(sid_pointer)))
