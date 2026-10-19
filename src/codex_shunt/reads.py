@@ -384,6 +384,10 @@ def _resolve(read: Read, cwd: Path, max_files: int, powershell: bool, engine: st
     for token in operands:
         value = token.value
         if is_ps:
+            # PowerShell expands provider-home syntax even inside quotes; a
+            # Python literal '~' directory must never stand in for that path.
+            if value.startswith("~"):
+                raise ReadError("unsupported-tilde")
             if ":" in re.sub(r"^[A-Za-z]:[\\/]", "", value):
                 raise ReadError("unsupported-provider")
             value = value.replace("\\", "/")

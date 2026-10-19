@@ -193,7 +193,8 @@ A 400-line slice remains direct unless it reaches the byte threshold.
 
 Windows paths, including spaces and drive letters, are supported. Explicit shell
 metadata selects PowerShell versus POSIX syntax; otherwise the host platform is
-used. Source files must remain eligible text inside the working directory.
+used. Source files must remain eligible text inside the working directory;
+PowerShell provider-home (`~`) paths stay direct.
 UTF-16, other encodings, and CR-only line endings stay direct. Windows PowerShell reads of non-ASCII
 UTF-8 without a BOM require `-Encoding UTF8` to avoid its ambiguous legacy default.
 

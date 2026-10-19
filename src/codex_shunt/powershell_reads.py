@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import re
 import shutil
 import tempfile
 from pathlib import Path
@@ -17,6 +18,7 @@ from .read_process import run_read_process
 _HELPER = r"""
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
+Set-Location -LiteralPath '__CWD__'
 $request = Get-Content -LiteralPath '__REQUEST__' -Raw -Encoding UTF8 | ConvertFrom-Json
 try {
     if ($request.action -eq 'expand') {
@@ -59,7 +61,8 @@ def powershell_request(request: dict[str, object], cwd: Path, shell: str) -> obj
     with tempfile.TemporaryDirectory(prefix="codex-shunt-read-") as temporary:
         path = Path(temporary) / "request.json"
         path.write_text(json.dumps(request, ensure_ascii=True), encoding="utf-8")
-        script = _HELPER.replace("__REQUEST__", str(path).replace("'", "''"))
+        literals = {"__REQUEST__": str(path), "__CWD__": str(cwd)}
+        script = re.sub(r"__REQUEST__|__CWD__", lambda match: literals[match[0]].replace("'", "''"), _HELPER)
         if os.name == "nt" and shell == "powershell":
             from .windows_workspace import powershell_command
             command = powershell_command(script)

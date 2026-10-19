@@ -151,6 +151,13 @@ class ReadPlanTests(ReadFixture):
             self.assertIsNotNone(read)
             self.assertEqual(helper.call_args.args[0]['path'], '*.html')
 
+    def test_powershell_provider_home_is_not_a_literal_tilde_directory(self):
+        (self.root / '~').mkdir()
+        (self.root / '~/a.html').write_text('different file\n')
+        self.assertIsNone(self.read("Get-Content '~/a.html'"))
+        self.assertIsNone(self.read('Get-Content ~/a.html'))
+        self.assertIsNotNone(self.read("cat '~/a.html'", shell='bash'))
+
     def test_native_select_string_matches_are_measured_without_python_regex_substitution(self):
         with patch('codex_shunt.reads.powershell_request', return_value=[{'file': 0, 'line': 2},
                                                                                {'file': 1, 'line': 4}]) as helper:
@@ -328,8 +335,9 @@ class NativePowerShellReadTests(ReadFixture):
                 root = self.root / '[literal]'
                 root.mkdir(exist_ok=True)
                 (root / 'a.html').write_text('needle\n')
-                read = parse_read('Get-Content *.html', root, 5, engine)
-                self.assertEqual(read.paths, ((root / 'a.html').resolve(),))
+                result = recognize_read('Get-Content *.html', root, 5, engine)
+                self.assertIsNotNone(result.read, result.reason)
+                self.assertEqual(result.read.paths, ((root / 'a.html').resolve(),))
 
     def test_helper_works_in_constrained_language_and_preserves_unicode(self):
         from codex_shunt import powershell_reads
