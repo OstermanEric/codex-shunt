@@ -10,7 +10,7 @@ from typing import Any
 
 from .config import load_config
 from .db import record_routing_event
-from .reads import parse_read, read_metrics, read_question
+from .reads import recognize_read, read_metrics, read_question
 from .sources import collect_sources
 from .worker import run_worker
 
@@ -36,12 +36,15 @@ def _shell_command(tool_input: Any) -> str:
     return ""
 
 
-def _record_route(event: dict[str, Any], decision: str, reason: str, metrics: dict[str, int]) -> None:
+def _record_route(event: dict[str, Any], decision: str, reason: str, metrics: dict[str, int],
+                  *, read_family: str = "", read_features: tuple[str, ...] = (),
+                  measurement: str = "unmeasured") -> None:
     try:
         record_routing_event(
             session_id=event.get("session_id"), turn_id=event.get("turn_id"),
             parent_model=event.get("model"), tool_name=event.get("tool_name"),
-            decision=decision, reason=reason, **metrics,
+            decision=decision, reason=reason, read_family=read_family,
+            read_features=read_features, measurement=measurement, **metrics,
         )
     except Exception as exc:
         _debug(f"telemetry unavailable: {exc}")
@@ -62,29 +65,49 @@ def hook_pre() -> int:
         base = Path(str(event.get("cwd") or os.getcwd())).resolve()
         workdir = tool_input.get("workdir") if isinstance(tool_input, dict) else None
         cwd = (base / Path(str(workdir)).expanduser()).resolve() if workdir else base
-        read = parse_read(command, cwd, int(config["max_source_files"]))
+        recognition = recognize_read(command, cwd, int(config["max_source_files"]),
+                                     tool_input.get("shell") if isinstance(tool_input, dict) else None)
+        read = recognition.read
+        def record(decision: str, reason: str, metrics: dict[str, int] | None = None) -> None:
+            _record_route(event, decision, reason, metrics or {}, read_family=recognition.family,
+                          read_features=read.features if read else (),
+                          measurement="requested-text" if metrics is not None else "unmeasured")
+
         if read is None:
             _debug("unsupported operation; allowing original tool")
+            if recognition.family:
+                record("unsupported", recognition.reason)
             return 0
-        selection = collect_sources(
-            cwd, [str(path) for path in read.paths],
-            max_files=int(config["max_source_files"]), max_bytes=int(config["max_source_bytes"]),
-        )
-        if len(selection.files) != len(read.paths):
+        try:
+            selection = collect_sources(
+                cwd, [str(path) for path in dict.fromkeys(read.paths)],
+                max_files=int(config["max_source_files"]), max_bytes=int(config["max_source_bytes"]),
+            )
+        except (ValueError, OSError):
+            record("skipped", "source-selection-failed")
             return 0
-        metrics = read_metrics(read, selection)
+        if len(selection.files) != len(set(read.paths)):
+            record("skipped", "source-policy-exclusion")
+            return 0
+        try:
+            metrics = read_metrics(read, selection)
+        except Exception as exc:
+            _debug(f"read measurement failed open: {type(exc).__name__}")
+            record("skipped", "measurement-failed")
+            return 0
     except Exception as exc:
         _debug(f"read recognition failed open: {exc}")
         return 0
 
     if (metrics["source_lines"] < config["min_file_lines"]
             and metrics["source_bytes"] < config["min_source_bytes"]):
+        record("below_threshold", "small-read", metrics)
         return 0
     if not config["strict_routing"]:
-        _record_route(event, "would_route", "large-read", metrics)
+        record("would_route", "large-read", metrics)
         return 0
     if not config["source_sharing_acknowledged"]:
-        _record_route(event, "route_failed", "source-sharing-not-acknowledged", metrics)
+        record("route_failed", "source-sharing-not-acknowledged", metrics)
         return 0
     try:
         outcome = run_worker(
@@ -95,14 +118,14 @@ def hook_pre() -> int:
         if (outcome.result.get("needs_escalation")
                 or outcome.citation_count < 1
                 or outcome.valid_citation_count != outcome.citation_count):
-            _record_route(event, "route_failed", "worker-needs-primary-inspection", metrics)
+            record("route_failed", "worker-needs-primary-inspection", metrics)
             return 0
         context = _format_worker_context(outcome)
     except Exception as exc:
-        _record_route(event, "route_failed", type(exc).__name__, metrics)
+        record("route_failed", type(exc).__name__, metrics)
         _debug(f"worker failed open: {exc}")
         return 0
-    _record_route(event, "deny", "large-read", metrics)
+    record("deny", "large-read", metrics)
     print(json.dumps({"hookSpecificOutput": {
         "hookEventName": "PreToolUse",
         "permissionDecision": "deny", "permissionDecisionReason": context,

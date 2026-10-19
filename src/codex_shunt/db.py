@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import os
+import json
 import sqlite3
 import uuid
+from collections import Counter
 from contextlib import closing
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -28,7 +30,10 @@ CREATE TABLE IF NOT EXISTS routing_events (
     source_files INTEGER NOT NULL DEFAULT 0,
     source_bytes INTEGER NOT NULL DEFAULT 0,
     source_lines INTEGER NOT NULL DEFAULT 0,
-    estimated_source_tokens INTEGER NOT NULL DEFAULT 0
+    estimated_source_tokens INTEGER NOT NULL DEFAULT 0,
+    read_family TEXT NOT NULL DEFAULT '',
+    read_features TEXT NOT NULL DEFAULT '[]',
+    measurement TEXT NOT NULL DEFAULT 'legacy'
 );
 CREATE INDEX IF NOT EXISTS idx_routing_created ON routing_events(created_at);
 CREATE INDEX IF NOT EXISTS idx_routing_decision ON routing_events(decision);
@@ -128,6 +133,20 @@ def connect() -> sqlite3.Connection:
     connection = sqlite3.connect(path)
     connection.row_factory = sqlite3.Row
     connection.executescript(SCHEMA)
+    columns = {row[1] for row in connection.execute("PRAGMA table_info(routing_events)")}
+    for name, declaration in {
+        "read_family": "TEXT NOT NULL DEFAULT ''",
+        "read_features": "TEXT NOT NULL DEFAULT '[]'",
+        "measurement": "TEXT NOT NULL DEFAULT 'legacy'",
+    }.items():
+        if name not in columns:
+            try:
+                connection.execute(f"ALTER TABLE routing_events ADD COLUMN {name} {declaration}")
+            except sqlite3.OperationalError:
+                # Another simultaneous hook may have completed this migration.
+                if name not in {row[1] for row in connection.execute("PRAGMA table_info(routing_events)")}:
+                    connection.close()
+                    raise
     return connection
 
 
@@ -168,6 +187,9 @@ def record_routing_event(**values: Any) -> str:
         "source_bytes": values.pop("source_bytes", 0),
         "source_lines": values.pop("source_lines", 0),
         "estimated_source_tokens": values.pop("estimated_source_tokens", 0),
+        "read_family": values.pop("read_family", ""),
+        "read_features": json.dumps(sorted(set(values.pop("read_features", ())))),
+        "measurement": values.pop("measurement", "legacy"),
     }
     if values:
         raise TypeError(f"Unknown routing fields: {', '.join(values)}")
@@ -176,10 +198,10 @@ def record_routing_event(**values: Any) -> str:
             """INSERT INTO routing_events
             (id, created_at, session_id, turn_id, parent_model, tool_name,
              decision, reason, source_files, source_bytes, source_lines,
-             estimated_source_tokens)
+             estimated_source_tokens, read_family, read_features, measurement)
             VALUES (:id, :created_at, :session_id, :turn_id, :parent_model,
                     :tool_name, :decision, :reason, :source_files, :source_bytes,
-                    :source_lines, :estimated_source_tokens)""",
+                    :source_lines, :estimated_source_tokens, :read_family, :read_features, :measurement)""",
             row,
         )
     return event_id
@@ -312,6 +334,7 @@ def aggregate(since: str, comparison_model: str = DEFAULT_COMPARISON_MODEL) -> d
         summary["estimated_credits"] += float(row["actual_worker_credits"] or 0)
     return {
         "since": since, "routing": routing, "workers": workers,
+        "coverage": _coverage(routing_rows, comparison_model),
         "by_model": sorted(models.values(), key=lambda row: row["runs"], reverse=True),
         "setup_runs_excluded": len(all_workers) - len(worker_rows),
         "comparison": {
@@ -322,3 +345,50 @@ def aggregate(since: str, comparison_model: str = DEFAULT_COMPARISON_MODEL) -> d
                      "Setup excluded. Not measured account charges or end-to-end savings.",
         },
     }
+
+
+def _coverage(rows: list[dict[str, Any]], comparison_model: str) -> dict[str, Any]:
+    # Historical telemetry did not observe unsupported or below-threshold reads.
+    # Never mix that incomplete denominator into coverage percentages.
+    rows = [row for row in rows if row.get("measurement", "legacy") != "legacy"]
+    eligible = {"deny", "would_route", "route_failed"}
+
+    def counts(items: list[dict[str, Any]]) -> dict[str, int]:
+        return {
+            "calls": len(items),
+            "recognized": sum(row["decision"] != "unsupported" for row in items),
+            "unsupported": sum(row["decision"] == "unsupported" for row in items),
+            "below_threshold": sum(row["decision"] == "below_threshold" for row in items),
+            "routed": sum(row["decision"] == "deny" for row in items),
+            "unmeasured": sum(row["measurement"] == "unmeasured" for row in items),
+            "eligible": sum(row["decision"] in eligible for row in items),
+            "estimated_eligible_tokens": sum(int(row["estimated_source_tokens"] or 0) for row in items
+                                             if row["decision"] in eligible),
+            "estimated_unrouted_tokens": sum(int(row["estimated_source_tokens"] or 0) for row in items
+                                             if row["decision"] in {"would_route", "route_failed"}),
+        }
+
+    families: dict[str, list[dict[str, Any]]] = {}
+    features: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        families.setdefault(row["read_family"], []).append(row)
+        try:
+            tags = json.loads(row.get("read_features") or "[]")
+        except (ValueError, TypeError):
+            tags = []
+        for tag in tags:
+            features.setdefault(tag, []).append(row)
+    result: dict[str, Any] = counts(rows)
+    result["tracking_since"] = min((row["created_at"] for row in rows), default=None)
+    result["by_family"] = [{"family": name, **counts(items)} for name, items in sorted(families.items())]
+    result["by_feature"] = [{"feature": name, **counts(items)} for name, items in sorted(features.items())]
+    reasons = Counter(row["reason"] for row in rows
+                      if row["decision"] in {"unsupported", "skipped", "route_failed"})
+    result["by_reason"] = [{"reason": reason, "calls": number} for reason, number in reasons.most_common()]
+    result["estimated_unrouted_input_credits"] = (
+        result["estimated_unrouted_tokens"] * MODEL_RATES[comparison_model]["input"] / 1_000_000)
+    result["basis"] = ("New read-candidate observations only; historical incomplete coverage excluded. "
+                       "Tokens estimate requested text at bytes/4. Unrouted input credits are a gross "
+                       "uncached comparison-input opportunity, not net savings or account charges. "
+                       "Unknown output sizes are counted as unmeasured; feature counts overlap.")
+    return result

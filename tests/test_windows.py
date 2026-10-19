@@ -40,6 +40,8 @@ class WindowsReadTests(unittest.TestCase):
             ('cat "src\\space name.txt" -Tail 20', 20),
             ('type "src\\space name.txt" -TotalCount 0', 0),
             (f"Get-Content -LiteralPath '{self.source}'", 600),
+            ('Get-Content "src\\space name.txt" -Encoding UTF8', 600),
+            ('Get-Content "src\\space name.txt" | Select-Object -Skip 100 -First 400', 400),
         ]:
             with self.subTest(command=command):
                 read = parse_read(command, self.root, 1)
@@ -47,16 +49,15 @@ class WindowsReadTests(unittest.TestCase):
                 self.assertEqual(read.paths, (self.source.resolve(),))
                 self.assertEqual(read_metrics(read, self.selection)["source_lines"], lines)
 
-    def test_shell_evaluation_wildcards_and_unsupported_flags_stay_raw(self):
+    def test_shell_evaluation_and_unsupported_flags_stay_raw(self):
         for suffix in [
-            '-Encoding UTF8', '-Raw -Tail 2', '-TotalCount -1', '-Tail 1 -TotalCount 2',
-            '| Select-Object -First 2', '; Set-Content out.txt changed',
+            '-Encoding Unicode', '-Raw -Tail 2', '-TotalCount -1', '-Tail 1 -TotalCount 2',
+            '| Select-Object -Property Length', '; Set-Content out.txt changed',
             '> out.txt', '$(Get-Location)', '-Path other.txt', '"-Raw"',
         ]:
             with self.subTest(suffix=suffix):
                 self.assertIsNone(parse_read(f'Get-Content "src\\space name.txt" {suffix}', self.root, 1))
-        for command in ["Get-Content src\\*.txt", "Get-Content 'src\\*.txt'",
-                        "Get-Content @('file.txt')", "Get-Content a.txt,b.txt",
+        for command in ["Get-Content @('file.txt')", "Get-Content a.txt,b.txt",
                         'Get-Content "$env:SOURCE"', 'Get-Content FileSystem::file.txt',
                         'Get-Content file.txt:stream', '"Get-Content" file.txt']:
             self.assertIsNone(parse_read(command, self.root, 1))
@@ -64,7 +65,8 @@ class WindowsReadTests(unittest.TestCase):
     def test_literal_path_does_not_expand_brackets(self):
         source = self.root / "[fixture].txt"
         source.write_text("fixture", encoding="utf-8")
-        self.assertIsNone(parse_read("Get-Content '[fixture].txt'", self.root, 1))
+        with patch('codex_shunt.reads.powershell_request', return_value=[]):
+            self.assertIsNone(parse_read("Get-Content '[fixture].txt'", self.root, 1))
         self.assertEqual(parse_read("Get-Content -LiteralPath '[fixture].txt'", self.root, 1).paths,
                          (source.resolve(),))
 

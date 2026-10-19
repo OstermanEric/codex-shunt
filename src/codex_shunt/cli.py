@@ -411,6 +411,22 @@ def _render_stats(
         row("Source", (f"{routing['estimated_source_tokens_intercepted']:,} tokens intercepted", "value"),
             ("(gross est.)", "muted"))
 
+    coverage = payload.get("coverage", {})
+    if coverage.get("calls"):
+        lines.append("")
+        row("Coverage", (f"{coverage['recognized']:,}/{coverage['calls']:,} read calls recognized", "value"),
+            (f"· {coverage['below_threshold']:,} below threshold", "muted"))
+        row("Skipped", (f"{coverage['unsupported']:,} unsupported", "warning"),
+            (f"· {coverage['unmeasured']:,} output sizes unknown", "muted"))
+        if coverage["estimated_unrouted_tokens"]:
+            row("Potential", (f"{coverage['estimated_unrouted_tokens']:,} unrouted input tokens", "value"),
+                (f"≈ {credits(coverage['estimated_unrouted_input_credits'])} comparison credits (gross est.)", "muted"))
+        for item in coverage.get("by_feature", []):
+            row(item["feature"], (f"{item['calls']:,} calls · {item['routed']:,} routed", "value"),
+                (f"· {item['estimated_eligible_tokens']:,} eligible tokens (est.)", "muted"))
+        for item in coverage.get("by_reason", [])[:5]:
+            row("Skip reason", (f"{item['reason'].replace('-', ' ')}: {item['calls']:,}", "muted"))
+
     return "\n".join(lines).rstrip()
 
 

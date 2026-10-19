@@ -158,24 +158,52 @@ The pre-hook recognizes a deliberately small set of read-only shell commands:
 - `cat` with explicit files or unquoted file globs.
 - `head` / `tail` with line or byte counts, including `tail -n +N`.
 - `sed -n 'N,Mp'` for one file.
-- `rg` with a pattern and explicit files/globs; supported flags are
-  `-n`, `-i`, `-F`, and their long forms.
+- `rg` over explicit files, directory roots, or the current directory when no
+  root is supplied. Supported options are `-n`, `-i`, `-F`, their long forms,
+  and repeated `-g` / `--glob` filters before or after the pattern, including
+  `-g'*.html'` and `--glob='*.html'`. Ripgrep resolves its own ignore/glob rules.
 - The same commands through `rtk` or `rtk proxy`.
 
-On native Windows, `Get-Content` (also `gc`, `cat`, or `type`) supports **one
-explicit file** as a positional argument or with `-Path` / `-LiteralPath`, plus optional `-Raw`,
-`-TotalCount N`, or `-Tail N`. For example:
+PowerShell `Get-Content` (also `gc`, `cat`, or `type`) supports literal file arrays
+and bounded wildcards, positional paths or `-Path` / `-LiteralPath`, and optional
+`-Raw`, `-TotalCount N`, `-Tail N`, or `-Encoding UTF8`. It also recognizes the
+line-producing pipeline `| Select-Object -Skip N -First M`; either bound may be
+omitted. For example:
 
 ```powershell
 Get-Content -LiteralPath 'src\large file.py'
 Get-Content -LiteralPath 'src\large file.py' -TotalCount 600
+Get-Content test.htm, example.html -Encoding UTF8
+Get-Content '*.html' -Encoding UTF8
+Get-Content test.html | Select-Object -Skip 100 -First 400
 ```
 
-Windows paths, including spaces and drive letters, are supported. PowerShell
-wildcards, pipelines, expressions, and additional parameters run normally.
+`Select-String` / `sls` supports `-Pattern`, `-Path` / `-LiteralPath`, literal path
+arrays or wildcards, `-SimpleMatch`, `-CaseSensitive`, and UTF-8 encodings. Its
+matching uses the native PowerShell engine, preserving its default
+case-insensitive .NET regex behavior. Wildcards also use a fixed native helper.
+Helpers receive data rather than executable command text, run without profiles,
+and have a five-second timeout and output limits. Missing helpers allow the
+original command to run. PowerShell 7 also accepts `utf8BOM` / `utf8NoBOM`.
 
-Commands containing edits, pipelines, redirections, compound operations, shell
-expansions, or unsupported flags run normally. MCP tools are not intercepted.
+Independent supported reads separated by newlines or semicolons form one ordered
+batch. Every statement must be supported; one worker handles the whole batch.
+Repeated reads count toward requested output even when source copies are shared.
+A 400-line slice remains direct unless it reaches the byte threshold.
+
+Windows paths, including spaces and drive letters, are supported. Explicit shell
+metadata selects PowerShell versus POSIX syntax; otherwise the host platform is
+used. Source files must remain eligible text inside the working directory.
+UTF-16 and other encodings stay direct. Windows PowerShell reads of non-ASCII
+UTF-8 without a BOM require `-Encoding UTF8` to avoid its ambiguous legacy default.
+
+Edits, redirections, mixed scripts, variable evaluation, arbitrary scripts,
+unsupported pipelines/options, directory listings, and enumeration-to-search
+pipelines run normally. `-Raw` followed by line slicing stays direct. External
+`RIPGREP_CONFIG_PATH` settings also stay direct rather than being silently ignored.
+At most 64 read statements and the configured source limits are accepted; search
+output is bounded, and `Select-String` measurement accepts at most 10,000 matches.
+MCP tools are not intercepted.
 
 Selected text files are filtered and copied into a temporary workspace. Luna runs
 read-only with hooks disabled and a timeout. A successful, cited result replaces
@@ -186,7 +214,7 @@ Shunt sends the selected file contents to the worker, even when the requested
 operation is a range or search. The worker receives that operation as task data
 and must focus its evidence accordingly. Common sensitive paths and generated
 files are excluded; do not select secrets. Local telemetry stores counts and
-hashes, without source text, prompts, or answers.
+hashes, without source text, commands, paths, prompts, or answers.
 
 To inspect files explicitly:
 
@@ -255,6 +283,28 @@ have only an error type, without its detailed message, command, or source paths.
 For future hook failures, start Codex with `CODEX_SHUNT_DEBUG=1` to print runtime
 error details to stderr. A failed `shunt inspect` also prints its error directly.
 
+### Read coverage and routing opportunity
+
+`shunt stats --since 7d` now includes recognized read-candidate counts,
+below-threshold reads, unsupported forms, unknown output sizes, feature counts,
+and the most frequent skip reasons. Use `shunt stats --since 7d --json` for the
+complete `coverage.by_family`, `coverage.by_feature`, and `coverage.by_reason`
+breakdowns. Features can overlap within one call.
+
+Coverage starts with observations recorded by version **0.3.0**; older telemetry
+is preserved but excluded from its denominator. Read candidates are recognized
+command names, not every shell call or an exhaustive inventory of script reads.
+Unsupported expressions are counted without evaluating them. Unknown output
+sizes are explicitly unmeasured and contribute no token estimate.
+
+Potential is the measured requested text of eligible reads left on the primary
+path because routing was off or failed. Its gross uncached comparison-input
+credit estimate is `ceil(requested bytes / 4) × comparison input rate / 1,000,000`.
+This is an opportunity estimate, separate from reported worker savings; it does
+not subtract worker costs, replacement summaries, verification or cache effects.
+Counts and feature-level eligible tokens show how often new forms are used and
+how much qualifying text they cover, without recording command text or paths.
+
 ### How metrics are calculated
 
 <details>
@@ -282,6 +332,8 @@ estimates. Synthetic setup checks are excluded from worker metrics.
 | Tokens: cached | The subset of input served from cache; do not add it to input again. |
 | Tokens: output | Observed worker output tokens. Reasoning tokens are a subset of output, not an extra charge. |
 | Source | Gross estimated tokens intercepted by enforced hook routing: sum of `ceil(requested source bytes / 4)` for routed reads. Repeat reads count again. |
+| Coverage | New read-candidate calls recognized, below threshold, unsupported, routed, or unmeasured; family/feature/reason breakdowns are available in JSON. |
+| Potential | Estimated requested tokens for qualifying observed-only or failed-routing calls, with gross uncached comparison-input credits. Unknown output sizes and small reads are excluded. This is not net savings. |
 | Setup checks excluded | Number of synthetic setup runs omitted from worker metrics. Available as `setup_runs_excluded` in `--json`. |
 
 Worker attempts and routing events are separate counts: manual inspections add

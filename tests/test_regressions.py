@@ -124,7 +124,7 @@ class RoutingRegressions(unittest.TestCase):
 
     def test_ripgrep_preserves_pattern_and_measures_matches(self):
         with patch("codex_shunt.reads.shutil.which", return_value="/fake/rg"), \
-             patch("codex_shunt.reads.subprocess.run", return_value=SimpleNamespace(returncode=0, stdout=b"line\n" * 600)) as rg:
+             patch("codex_shunt.reads.run_read_process", return_value=b"line\n" * 600) as rg:
             output, run, _ = self.invoke("rg -n -F 'line' large.txt")
         self.assertTrue(output)
         self.assertIn('"pattern": "line"', run.call_args.kwargs["question"])
