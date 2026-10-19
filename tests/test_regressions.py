@@ -66,8 +66,7 @@ class RoutingRegressions(unittest.TestCase):
     def test_routing_uses_requested_lines_and_bytes(self):
         commands = ["cat large.txt", "tail -n +1 large.txt", "head -n 20 wide.txt",
                     "head -c 100000 wide.txt", "rtk proxy cat large.txt"]
-        if sys.platform != "win32":
-            commands.append("cat *.txt")  # Windows cat is Get-Content; wildcards stay raw.
+        commands.append("cat *.txt")
         for command in commands:
             with self.subTest(command=command):
                 output, run, _ = self.invoke(command)
@@ -110,9 +109,9 @@ class RoutingRegressions(unittest.TestCase):
     def test_quoted_glob_is_literal_and_unknown_flags_fail_open(self):
         for command in ["cat '*.txt'", "head --unknown large.txt", "sed -n '1p' *.txt",
                         "rg --pre malicious line large.txt", "cat --output out large.txt"]:
-            self.assertIsNone(parse_read(command, self.root, 500))
+            self.assertIsNone(parse_read(command, self.root, 500, shell="bash"))
         with patch.object(Path, "expanduser", side_effect=AssertionError("quoted tilde expanded")):
-            self.assertIsNone(parse_read('cat "~/large.txt"', self.root, 500))
+            self.assertIsNone(parse_read('cat "~/large.txt"', self.root, 500, shell="bash"))
 
     def test_range_measurement_and_tail_start(self):
         selection = collect_sources(self.root, ["large.txt"], max_files=1, max_bytes=1000000)

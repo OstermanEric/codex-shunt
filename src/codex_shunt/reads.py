@@ -267,6 +267,8 @@ def _powershell_read(words: list[Token], name: str, engine: str) -> Read:
         elif not search and flag in {"-totalcount", "-tail"}:
             if "count" in operation or not words or not re.fullmatch(r"\d{1,10}", words[0].value):
                 raise ReadError("unsupported-parameter")
+            if flag == "-tail" and int(words[0].value) > 2147483647:
+                raise ReadError("unsupported-parameter")
             operation.update(command="head" if flag == "-totalcount" else "tail",
                              count=words.pop(0).value, unit="lines")
         elif not search and flag == "-raw":
@@ -391,19 +393,21 @@ def _resolve(read: Read, cwd: Path, max_files: int, powershell: bool, engine: st
         magic = glob.has_magic(value) and (is_ps and not literal or not powershell and token.expand)
         if magic:
             features.append("wildcard")
-            prefix = str(candidate)
+            prefix = value
             prefix = prefix[:min(i for i, char in enumerate(prefix) if char in "*?[")]
-            _inside(Path(prefix) if prefix.endswith(("/", "\\")) else Path(prefix).parent, cwd)
+            prefix_path = Path(prefix) if prefix.endswith(("/", "\\")) else Path(prefix).parent
+            _inside(prefix_path if prefix_path.is_absolute() else cwd / prefix_path, cwd)
             if is_ps:
                 try:
-                    expanded = powershell_request({"action": "expand", "path": str(candidate),
+                    expanded = powershell_request({"action": "expand", "path": value,
                                                    "limit": max_files}, cwd, engine)
                 except ValueError as exc:
                     raise ReadError("wildcard-resolution-failed") from exc
                 if not isinstance(expanded, list) or not all(isinstance(path, str) for path in expanded):
                     raise ReadError("wildcard-resolution-failed")
             else:
-                expanded = glob.iglob(str(candidate))
+                pattern = str(candidate) if Path(value).is_absolute() or value.startswith("~") else value
+                expanded = (str(cwd / path) for path in glob.iglob(pattern, root_dir=cwd))
         else:
             expanded = [str(candidate)]
         found = False
@@ -467,6 +471,8 @@ def _chunks(read: Read, cwd: Path, output_limit: int) -> Iterator[bytes]:
         return
     contents = {path: path.read_bytes() for path in dict.fromkeys(read.paths)}
     if operation.get("shell") == "powershell":
+        if any(b"\r" in data.replace(b"\r\n", b"") for data in contents.values()):
+            raise ValueError("unsupported-line-endings")
         if operation["engine"] == "powershell" and not operation.get("encoding"):
             if any(not data.startswith(b"\xef\xbb\xbf") and not data.isascii() for data in contents.values()):
                 raise ValueError("encoding-ambiguous")

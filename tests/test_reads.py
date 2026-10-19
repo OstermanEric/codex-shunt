@@ -138,6 +138,18 @@ class ReadPlanTests(ReadFixture):
                 self.assertIsNone(self.read(command, max_files=1))
         self.assertIsNone(self.read('\n'.join(['Get-Content a.html'] * 65)))
         self.assertIsNone(self.read('Get-Content ../outside.html'))
+        self.assertIsNone(self.read('Get-Content a.html -Tail 2147483648'))
+
+    def test_glob_root_is_literal_even_when_its_directory_name_has_brackets(self):
+        root = self.root / '[literal]'
+        root.mkdir()
+        (root / 'a.html').write_text('needle\n')
+        read = parse_read('cat *.html', root, 5, 'bash')
+        self.assertEqual(read.paths, ((root / 'a.html').resolve(),))
+        with patch('codex_shunt.reads.powershell_request', return_value=[str(root / 'a.html')]) as helper:
+            read = parse_read('Get-Content *.html', root, 5, 'powershell')
+            self.assertIsNotNone(read)
+            self.assertEqual(helper.call_args.args[0]['path'], '*.html')
 
     def test_native_select_string_matches_are_measured_without_python_regex_substitution(self):
         with patch('codex_shunt.reads.powershell_request', return_value=[{'file': 0, 'line': 2},
@@ -304,6 +316,20 @@ class NativePowerShellReadTests(ReadFixture):
                 self.assertEqual(self.metrics(read)['source_lines'], 600)
                 read = self.read('Get-Content a.html,b.html | Select-Object -Skip 590 -First 30', shell=engine)
                 self.assertEqual(self.metrics(read)['source_lines'], 30)
+                script = '(Get-Content a.html,b.html | Select-Object -Skip 590 -First 30 | Measure-Object).Count'
+                actual = run_read_process([shutil.which(engine), '-NoProfile', '-NonInteractive',
+                                           '-Command', script], self.root, 128)
+                self.assertEqual(int(actual.strip()), self.metrics(read)['source_lines'])
+                for options, expected in [('-Pattern NEEDLE', 600),
+                                          ('-Pattern NEEDLE -CaseSensitive', 0),
+                                          ("-Pattern 'n.edle' -SimpleMatch", 0)]:
+                    read = self.read('Select-String -Path a.html ' + options, shell=engine)
+                    self.assertEqual(self.metrics(read)['source_lines'], expected)
+                root = self.root / '[literal]'
+                root.mkdir(exist_ok=True)
+                (root / 'a.html').write_text('needle\n')
+                read = parse_read('Get-Content *.html', root, 5, engine)
+                self.assertEqual(read.paths, ((root / 'a.html').resolve(),))
 
     def test_helper_works_in_constrained_language_and_preserves_unicode(self):
         from codex_shunt import powershell_reads

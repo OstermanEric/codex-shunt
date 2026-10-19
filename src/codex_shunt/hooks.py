@@ -93,7 +93,11 @@ def hook_pre() -> int:
             metrics = read_metrics(read, selection)
         except Exception as exc:
             _debug(f"read measurement failed open: {type(exc).__name__}")
-            record("skipped", "measurement-failed")
+            # Persist only known categories, never exception text containing data.
+            categories = {"read-timeout", "read-output-limit", "read-process-failed", "rg-unavailable",
+                          "powershell-unavailable", "powershell-helper-failed", "encoding-ambiguous",
+                          "unsupported-line-endings", "search-evaluation-failed"}
+            record("skipped", str(exc) if str(exc) in categories else "measurement-failed")
             return 0
     except Exception as exc:
         _debug(f"read recognition failed open: {exc}")

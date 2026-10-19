@@ -20,6 +20,18 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python }}
+      - name: Install pinned ripgrep for native read tests
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $archive = Join-Path $env:RUNNER_TEMP 'ripgrep-14.1.1.zip'
+          Invoke-WebRequest 'https://github.com/BurntSushi/ripgrep/releases/download/14.1.1/ripgrep-14.1.1-x86_64-pc-windows-msvc.zip' -OutFile $archive
+          if ((Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant() -ne 'd0f534024c42afd6cb4d38907c25cd2b249b79bbe6cc1dbee8e3e37c2b6e25a1') { throw 'ripgrep archive checksum mismatch' }
+          $destination = Join-Path $env:RUNNER_TEMP 'shunt-ripgrep'
+          Expand-Archive -LiteralPath $archive -DestinationPath $destination
+          $binary = Get-ChildItem -LiteralPath $destination -Filter rg.exe -Recurse | Select-Object -First 1
+          if (-not $binary) { throw 'ripgrep executable missing' }
+          $binary.Directory.FullName | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
       - run: python -m unittest discover -s tests -v
       - run: python -m compileall -q src
   windows-sandbox:
