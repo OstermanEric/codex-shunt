@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import json
 import sqlite3
+import stat
 import uuid
 from collections import Counter
 from contextlib import closing
@@ -85,13 +86,20 @@ def _default_data_dir() -> Path:
     return Path.home() / ".local" / "share" / "codex-shunt"
 
 
-def metrics_paths() -> list[Path]:
+def _store_issue(issues: list[dict[str, str]], path: Path, reason: str) -> None:
+    issue = {"path": str(path), "reason": reason}
+    if issue not in issues:
+        issues.append(issue)
+
+
+def metrics_paths(issues: list[dict[str, str]] | None = None) -> list[Path]:
     """Return unique telemetry stores available to reporting commands.
 
     Hooks may receive a writable PLUGIN_DATA directory while terminal commands
     do not. Keep explicit overrides isolated, but discover both the normal
     terminal store and Codex plugin-data stores for the default reporting path.
     """
+    issues = issues if issues is not None else []
     override = os.environ.get("CODEX_SHUNT_DATA_DIR")
     if override:
         candidates = [Path(override).expanduser().resolve()]
@@ -107,13 +115,18 @@ def metrics_paths() -> list[Path]:
         ).expanduser()
         plugin_data_root = codex_home / "plugins" / "data"
         try:
-            candidates.extend(
-                path.parent
-                for path in plugin_data_root.glob("*/metrics.sqlite3")
-                if path.is_file()
-            )
-        except OSError:
+            # Path.glob/is_file can suppress permission errors, particularly
+            # on Python 3.14. Discovery must distinguish hidden data from zero.
+            for path in plugin_data_root.iterdir():
+                try:
+                    if stat.S_ISDIR(path.stat().st_mode):
+                        candidates.append(path)
+                except OSError:
+                    _store_issue(issues, path, "discovery-unavailable")
+        except FileNotFoundError:
             pass
+        except OSError:
+            _store_issue(issues, plugin_data_root, "discovery-unavailable")
 
     unique: list[Path] = []
     seen: set[Path] = set()
@@ -122,7 +135,17 @@ def metrics_paths() -> list[Path]:
         if resolved in seen:
             continue
         seen.add(resolved)
-        if (resolved / "metrics.sqlite3").is_file() or override:
+        path = resolved / "metrics.sqlite3"
+        try:
+            regular = stat.S_ISREG(path.stat().st_mode)
+            if not regular:
+                _store_issue(issues, path, "nonfile-store")
+        except FileNotFoundError:
+            regular = False
+        except OSError:
+            regular = False
+            _store_issue(issues, path, "store-unavailable")
+        if regular or override:
             unique.append(resolved)
     return unique
 
@@ -150,13 +173,11 @@ def connect() -> sqlite3.Connection:
     return connection
 
 
-def _connect_readonly(data_dir: Path) -> sqlite3.Connection | None:
+def _connect_readonly(data_dir: Path) -> sqlite3.Connection:
     path = data_dir / "metrics.sqlite3"
-    if not path.is_file():
-        return None
     uri = path.resolve().as_uri() + "?mode=ro"
+    connection = sqlite3.connect(uri, uri=True)
     try:
-        connection = sqlite3.connect(uri, uri=True)
         connection.row_factory = sqlite3.Row
         tables = {
             row[0]
@@ -165,11 +186,11 @@ def _connect_readonly(data_dir: Path) -> sqlite3.Connection | None:
             ).fetchall()
         }
         if not {"routing_events", "worker_runs"}.issubset(tables):
-            connection.close()
-            return None
+            raise sqlite3.DatabaseError("Metrics store is missing required tables")
         return connection
-    except sqlite3.Error:
-        return None
+    except Exception:
+        connection.close()
+        raise
 
 
 def record_routing_event(**values: Any) -> str:
@@ -268,37 +289,58 @@ def since_timestamp(raw: str) -> str | None:
     return (datetime.now(timezone.utc) - delta).isoformat()
 
 
-def fetch_rows(table: str, since: str) -> list[dict[str, Any]]:
-    if table not in {"routing_events", "worker_runs"}:
-        raise ValueError(f"Unsupported table: {table}")
+def fetch_metrics(since: str, tables: tuple[str, ...] = ("routing_events", "worker_runs")) -> tuple[dict[str, list[dict[str, Any]]], dict[str, Any]]:
+    if not set(tables).issubset({"routing_events", "worker_runs"}):
+        raise ValueError(f"Unsupported tables: {tables}")
     start = since_timestamp(since)
-    query = f"SELECT * FROM {table}"
     parameters: tuple[Any, ...] = (start,) if start else ()
-    if start:
-        query += " WHERE created_at >= ?"
-    query += " ORDER BY created_at DESC"
-
-    rows_by_id: dict[str, dict[str, Any]] = {}
-    for data_dir in metrics_paths():
-        connection = _connect_readonly(data_dir)
-        if connection is None:
+    issues: list[dict[str, str]] = []
+    paths = metrics_paths(issues)
+    rows_by_table: dict[str, dict[str, dict[str, Any]]] = {table: {} for table in tables}
+    stores_read = []
+    for data_dir in paths:
+        try:
+            connection = _connect_readonly(data_dir)
+        except (OSError, sqlite3.Error):
+            _store_issue(issues, data_dir / "metrics.sqlite3", "store-unavailable")
             continue
         try:
-            for row in connection.execute(query, parameters).fetchall():
-                rendered = dict(row)
-                rows_by_id.setdefault(str(rendered["id"]), rendered)
+            # Do not merge half of an unreadable store into a complete report.
+            store_rows = {}
+            for table in tables:
+                query = f"SELECT * FROM {table}"
+                if start:
+                    query += " WHERE created_at >= ?"
+                store_rows[table] = connection.execute(query + " ORDER BY created_at DESC", parameters).fetchall()
+            for table, rows in store_rows.items():
+                for row in rows:
+                    rendered = dict(row)
+                    rows_by_table[table].setdefault(str(rendered["id"]), rendered)
+            stores_read.append(str(data_dir / "metrics.sqlite3"))
         except sqlite3.Error:
-            pass
+            _store_issue(issues, data_dir / "metrics.sqlite3", "query-unavailable")
         finally:
             connection.close()
-    return sorted(rows_by_id.values(), key=lambda row: row["created_at"], reverse=True)
+    availability = {
+        "status": ("partial" if issues else "complete") if stores_read else "unavailable",
+        "scope": "explicit" if os.environ.get("CODEX_SHUNT_DATA_DIR") else "discovered",
+        "stores_read": stores_read,
+        "issues": issues,
+    }
+    return {table: sorted(rows.values(), key=lambda row: row["created_at"], reverse=True)
+            for table, rows in rows_by_table.items()}, availability
+
+
+def fetch_rows(table: str, since: str) -> list[dict[str, Any]]:
+    return fetch_metrics(since, (table,))[0][table]
 
 
 def aggregate(since: str, comparison_model: str = DEFAULT_COMPARISON_MODEL) -> dict[str, Any]:
     if comparison_model not in MODEL_RATES:
         raise ValueError(f"Unknown comparison model: {comparison_model}")
-    routing_rows = fetch_rows("routing_events", since)
-    all_workers = fetch_rows("worker_runs", since)
+    rows, availability = fetch_metrics(since)
+    routing_rows = rows["routing_events"]
+    all_workers = rows["worker_runs"]
     worker_rows = [row for row in all_workers if row["task_kind"] != "setup-smoke"]
     successful = [row for row in worker_rows if row["status"] == "success"
                   and not row.get("error_type") and not row.get("needs_escalation")]
@@ -333,7 +375,7 @@ def aggregate(since: str, comparison_model: str = DEFAULT_COMPARISON_MODEL) -> d
         summary["tokens"] += int(row["input_tokens"] or 0) + int(row["output_tokens"] or 0)
         summary["estimated_credits"] += float(row["actual_worker_credits"] or 0)
     return {
-        "since": since, "routing": routing, "workers": workers,
+        "since": since, "availability": availability, "routing": routing, "workers": workers,
         "coverage": _coverage(routing_rows, comparison_model),
         "by_model": sorted(models.values(), key=lambda row: row["runs"], reverse=True),
         "setup_runs_excluded": len(all_workers) - len(worker_rows),

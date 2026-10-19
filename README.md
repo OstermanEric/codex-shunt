@@ -178,6 +178,12 @@ Get-Content '*.html' -Encoding UTF8
 Get-Content test.html | Select-Object -Skip 100 -First 400
 ```
 
+For line reads, Shunt calculates source ranges before launching Luna. For example,
+`-Skip 50 -First 500` means source lines 51–550. The worker receives explicit line
+units and resolved ranges; citations must stay inside those ranges, with evidence
+for every nonempty selected range. These checks verify scope, not the truth or
+completeness of a summary; the primary model still verifies material claims.
+
 `Select-String` / `sls` supports `-Pattern`, `-Path` / `-LiteralPath`, literal path
 arrays or wildcards, `-SimpleMatch`, `-CaseSensitive`, and UTF-8 encodings. Its
 matching uses the native PowerShell engine, preserving its default
@@ -190,6 +196,17 @@ Independent supported reads separated by newlines or semicolons form one ordered
 batch. Every statement must be supported; one worker handles the whole batch.
 Repeated reads count toward requested output even when source copies are shared.
 A 400-line slice remains direct unless it reaches the byte threshold.
+If Luna escalates, the entire original batch proceeds. This is a fallback, not
+a successful interception.
+
+When the hook receives `workdir`, relative file paths resolve there; relative
+workdirs resolve from event `cwd`. Some Codex versions forward only the command,
+omitting the tool's separate workdir; event `cwd` is the **session directory**.
+In those versions, start the chat in the intended project directory or use
+`shunt inspect --root <project-directory> --question <question> <file>` explicitly.
+Shunt cannot recover an omitted workdir from the hook payload.
+For a path-resolution problem, `CODEX_SHUNT_DEBUG=1` prints the skip reason and
+effective working directory to stderr; these paths are not stored in telemetry.
 
 Windows paths, including spaces and drive letters, are supported. Explicit shell
 metadata selects PowerShell versus POSIX syntax; otherwise the host platform is
@@ -261,6 +278,12 @@ listed by `shunt stats --help`.
 
 Reports discover both Terminal and Codex plugin-data stores. Set
 `CODEX_SHUNT_DATA_DIR` only to intentionally scope config and metrics to one store.
+Reports show **Metrics unavailable** when no store is readable, and
+**Incomplete metrics** when discovery or reading fails for some stores. JSON
+includes `availability.status`, `scope`, `stores_read`, and categorized `issues`;
+check availability before interpreting numeric totals. An unavailable report's
+zero-valued aggregates do not establish zero activity. Readable-store totals may
+be incomplete inside a sandbox; use host access to inspect hidden stores.
 
 **Credits are estimates, not measured account charges or end-to-end savings.**
 Source interception is a gross estimate, not net tokens saved. See the expandable
@@ -325,7 +348,7 @@ estimates. Synthetic setup checks are excluded from worker metrics.
 | Average time | Total recorded worker duration divided by all non-setup attempts, including failures and escalations. Displayed in seconds. |
 | Outcomes: failed | Attempts with a failed status or recorded error. Inspect them with `shunt stats --failures`. |
 | Outcomes: needed review | Past attempts where the worker requested escalation to the primary model, not user review. Failure and escalation counts can overlap. |
-| Citations | Valid citation ranges divided by all recorded ranges. Validation checks allowed files and line bounds, not whether a claim is true. |
+| Citations | Valid citation ranges divided by all recorded ranges. Validation checks allowed files and line bounds, plus selected ranges for hook-routed line reads. It does not prove a claim is true. |
 | Routing: routed | Hook reads replaced by accepted worker results; the original read was intercepted. |
 | Routing: fallbacks | Routing attempts that allowed the original read to continue, such as missing consent, worker errors, invalid citations, or escalation. |
 | Routing: observed only | Eligible reads seen while strict routing was off. No worker replacement occurred. Hidden when zero. |
@@ -362,6 +385,11 @@ replacement summaries, verification, or retries, so it is not net tokens saved.
 </details>
 
 ## Development
+
+Version **0.3.1** adds resolved line-range validation, explicit metrics availability,
+and diagnostics for omitted hook workdirs. See the
+[user-report investigation](docs/user-report-investigation.md) for validation and
+remaining limitations.
 
 ```bash
 python3 -m unittest discover -s tests -v

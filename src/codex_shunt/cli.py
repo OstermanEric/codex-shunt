@@ -24,7 +24,7 @@ from .config import (
     save_user_config,
     user_config_path,
 )
-from .db import aggregate, database_path, fetch_rows
+from .db import aggregate, database_path, fetch_metrics
 from .hooks import hook_pre
 from .pricing import MODEL_RATES
 from .sources import collect_sources
@@ -362,6 +362,17 @@ def _render_stats(
     line(("─" * min(64, width - 4), "muted"))
     lines.append("")
 
+    availability = payload.get("availability", {})
+    if availability.get("status") == "unavailable":
+        line(("Metrics unavailable", "warning"))
+        line(("No readable metrics stores are visible. Totals cannot be determined.", "muted"))
+        line(("Run stats with host access to check stores hidden by a sandbox.", "muted"))
+        return "\n".join(lines)
+    if availability.get("status") == "partial":
+        line(("Incomplete metrics: some stores could not be discovered or read.", "warning"))
+        line(("All totals below cover readable stores only.", "muted"))
+        lines.append("")
+
     if total:
         tone = "good" if savings > 0 else "bad" if savings < 0 else "muted"
         headline = "saved" if savings >= 0 else "extra cost"
@@ -369,7 +380,8 @@ def _render_stats(
         line((f"{credits(abs(savings))} credits {headline}", tone), (difference, tone))
         line((f"Estimated vs {model}", "muted"))
     else:
-        line(("No worker runs yet", "value"))
+        line(("No worker runs in readable stores" if availability.get("status") == "partial"
+              else "No worker runs yet", "value"))
         line(("Run a Shunt inspection to start tracking savings.", "muted"))
 
     lines.append("")
@@ -431,12 +443,13 @@ def _render_stats(
 
 
 def _failures_payload(since: str) -> dict[str, Any]:
+    rows, availability = fetch_metrics(since, ("worker_runs",))
     failures = [
-        row for row in fetch_rows("worker_runs", since)
+        row for row in rows["worker_runs"]
         if row["task_kind"] != "setup-smoke"
         and (row["status"] == "failed" or row.get("error_type"))
     ]
-    return {"since": since, "failures": failures}
+    return {"since": since, "availability": availability, "failures": failures}
 
 
 def _render_failures(
@@ -452,9 +465,15 @@ def _render_failures(
     line(f"Codex Shunt · failures · {_period_label(since)}", "1;36")
     line("─" * min(64, width - 4), "90")
     lines.append("")
+    availability = payload.get("availability", {})
+    if availability.get("status") == "unavailable":
+        line("Metrics unavailable: no readable stores are visible; failure counts cannot be determined.", "1;33")
+        return "\n".join(lines)
+    if availability.get("status") == "partial":
+        line("Incomplete metrics: failure counts cover readable stores only.", "1;33")
     failures = payload["failures"]
     if not failures:
-        line("No failed worker runs in this period.", "1;32")
+        line("No failed worker runs in readable stores in this period.", "1;32")
         return "\n".join(lines)
 
     count = len(failures)

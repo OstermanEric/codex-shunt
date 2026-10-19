@@ -248,7 +248,8 @@ def worker_limitation(result: dict[str, Any]) -> str:
 
 
 def _validate_result(
-    result: dict[str, Any], workspace: Path, max_output_chars: int, approved_files: set[str]
+    result: dict[str, Any], workspace: Path, max_output_chars: int, approved_files: set[str],
+    requested_ranges: list[list[tuple[str, int, int]]] | None = None,
 ) -> tuple[int, int]:
     encoded = json.dumps(result, ensure_ascii=False)
     if len(encoded) > max_output_chars:
@@ -271,6 +272,7 @@ def _validate_result(
         raise WorkerError("Worker returned no cited findings. " + worker_limitation(result))
 
     valid = 0
+    cited: list[tuple[str, int, int]] = []
     for finding in findings:
         if not isinstance(finding, dict):
             continue
@@ -295,11 +297,23 @@ def _validate_result(
         except OSError:
             continue
         if 1 <= start <= end <= max(line_count, 1):
+            filename = path.relative_to(workspace.resolve()).as_posix()
+            if requested_ranges is not None and not any(
+                filename == file and low <= start <= end <= high
+                for spans in requested_ranges for file, low, high in spans
+            ):
+                continue
             valid += 1
+            cited.append((filename, start, end))
 
     if valid != len(findings):
         result["needs_escalation"] = True
         raise WorkerError(f"Codex Shunt validated {valid} of {len(findings)} worker citations")
+    if requested_ranges is not None and not result["needs_escalation"]:
+        for spans in requested_ranges:
+            for filename, low, high in spans:
+                if not any(file == filename and low <= start <= end <= high for file, start, end in cited):
+                    raise WorkerError("Worker omitted evidence for a requested source range")
     return len(findings), valid
 
 
@@ -312,6 +326,7 @@ def run_worker(
     session_id: str | None = None,
     turn_id: str | None = None,
     parent_model: str | None = None,
+    requested_ranges: list[list[tuple[str, int, int]]] | None = None,
 ) -> WorkerOutcome:
     ensure_source_sharing_acknowledged(config)
     run_id = str(uuid.uuid4())
@@ -411,6 +426,7 @@ def run_worker(
             citation_count, valid_citations = _validate_result(
                 result, workspace, int(config["max_output_chars"]),
                 {item.relative.as_posix() for item in selection.files},
+                requested_ranges,
             )
             validated = True
     except subprocess.TimeoutExpired as exc:

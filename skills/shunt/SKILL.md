@@ -66,9 +66,24 @@ configuration, authentication, or worker fails, or its evidence is invalid or
 needs escalation, allow the original tool call. Telemetry failure alone does
 not prevent a valid result. Unsupported shell commands also run normally.
 
+For line reads, the hook calculates source ranges before launching Luna and
+validates citations against those ranges. `-Skip 50 -First 500` selects lines
+51–550, not characters. Each nonempty selected range in a line-only batch needs
+cited evidence. These checks validate scope; the primary model must still verify
+material claims and summary completeness. An escalating batch allows the entire
+original call and counts as a fallback, not a successful interception.
+
 The hook accepts both the legacy Bash `tool_input.command` field and the
 `tool_input.cmd` field used by current code-mode `exec_command` calls. Codex
 still exposes both forms to hook matchers as `Bash`.
+
+Some Codex versions omit a shell call's separate `workdir` when constructing
+hook input; top-level `cwd` identifies the session directory. Shunt honors a
+workdir when supplied but cannot recover an omitted override. For reads from
+another project, prefer explicit `inspect --root <project-directory>` or start
+the chat in that directory. Do not assume a successful shell read proves the
+hook saw the same directory. `CODEX_SHUNT_DEBUG=1` prints skip reasons and the
+effective directory to stderr for diagnosis.
 
 When the user asks to enable or disable strict routing, run:
 
@@ -133,6 +148,14 @@ change the default, or `stats --compare-to <model>` for one report.
 Stats automatically discover the terminal store and
 Codex plugin-data stores; use `CODEX_SHUNT_DATA_DIR` only when intentionally
 scoping a report to one metrics database.
+
+Check `availability.status` before interpreting JSON totals. `unavailable` means
+no store could be read; numeric zeros then do not establish zero activity.
+`partial` means only readable stores contributed because discovery or reading
+failed elsewhere. Report incomplete data explicitly. Text reports show the same
+distinction. If sandbox restrictions hide stores, retry stats once with scoped
+host access; stats is read-only and does not launch Luna. Even `complete` covers
+only the explicit scope or discovered stores, not stores hidden without an error.
 
 ## Routing boundaries
 

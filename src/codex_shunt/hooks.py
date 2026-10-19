@@ -10,7 +10,7 @@ from typing import Any
 
 from .config import load_config
 from .db import record_routing_event
-from .reads import recognize_read, read_metrics, read_question
+from .reads import recognize_read, read_metrics, read_question, requested_line_ranges
 from .sources import collect_sources
 from .worker import run_worker
 
@@ -74,7 +74,10 @@ def hook_pre() -> int:
                           measurement="requested-text" if metrics is not None else "unmeasured")
 
         if read is None:
-            _debug("unsupported operation; allowing original tool")
+            _debug(f"{recognition.reason}; effective workdir={cwd}; allowing original tool")
+            if recognition.reason == "missing-or-nonfile-path" and not workdir:
+                _debug("hook supplied no workdir override; Codex may omit exec_command workdir. "
+                       "Use the intended session directory or explicit inspect --root.")
             if recognition.family:
                 record("unsupported", recognition.reason)
             return 0
@@ -114,8 +117,10 @@ def hook_pre() -> int:
         record("route_failed", "source-sharing-not-acknowledged", metrics)
         return 0
     try:
+        ranges = requested_line_ranges(read, selection)
         outcome = run_worker(
-            question=read_question(read, selection.root), selection=selection, config=config,
+            question=read_question(read, selection.root, ranges), selection=selection, config=config,
+            requested_ranges=ranges,
             task_kind="hook-routed-read", session_id=event.get("session_id"),
             turn_id=event.get("turn_id"), parent_model=event.get("model"),
         )
@@ -124,7 +129,7 @@ def hook_pre() -> int:
                 or outcome.valid_citation_count != outcome.citation_count):
             record("route_failed", "worker-needs-primary-inspection", metrics)
             return 0
-        context = _format_worker_context(outcome)
+        context = _format_worker_context(outcome, ranges)
     except Exception as exc:
         record("route_failed", type(exc).__name__, metrics)
         _debug(f"worker failed open: {exc}")
@@ -137,13 +142,18 @@ def hook_pre() -> int:
     return 0
 
 
-def _format_worker_context(outcome: Any) -> str:
+def _format_worker_context(outcome: Any, ranges: list[list[tuple[str, int, int]]] | None = None) -> str:
     result = outcome.result
     lines = [
         "Codex Shunt routed this read through its subscription-authenticated Luna worker. "
         "The original read was not executed.",
-        f"Run ID: {outcome.run_id}", "", result["summary"],
+        f"Run ID: {outcome.run_id}",
     ]
+    if ranges is not None:
+        for index, spans in enumerate(ranges, 1):
+            lines.append(f"Requested statement {index}: " + ", ".join(
+                f"{file}:{start}-{end} ({end - start + 1} lines)" for file, start, end in spans))
+    lines.extend(["", result["summary"]])
     for finding in result["findings"][:20]:
         lines.append(
             f"- {finding['file']}:{finding['line_start']}-{finding['line_end']}: {finding['claim']}"
