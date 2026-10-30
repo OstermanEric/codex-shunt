@@ -10,7 +10,7 @@ from typing import Any
 
 from .config import load_config
 from .db import record_routing_event
-from .reads import recognize_read, read_metrics, read_question, requested_line_ranges
+from .reads import recognize_read, read_metrics, read_question, requested_line_ranges, search_statement_indices
 from .sources import collect_sources
 from .worker import run_worker
 
@@ -70,7 +70,7 @@ def hook_pre() -> int:
         read = recognition.read
         def record(decision: str, reason: str, metrics: dict[str, int] | None = None) -> None:
             _record_route(event, decision, reason, metrics or {}, read_family=recognition.family,
-                          read_features=read.features if read else (),
+                          read_features=read.features if read else recognition.features,
                           measurement="requested-text" if metrics is not None else "unmeasured")
 
         if read is None:
@@ -121,6 +121,7 @@ def hook_pre() -> int:
         outcome = run_worker(
             question=read_question(read, selection.root, ranges), selection=selection, config=config,
             requested_ranges=ranges,
+            search_statements=search_statement_indices(read),
             task_kind="hook-routed-read", session_id=event.get("session_id"),
             turn_id=event.get("turn_id"), parent_model=event.get("model"),
         )
@@ -131,7 +132,10 @@ def hook_pre() -> int:
             return 0
         context = _format_worker_context(outcome, ranges)
     except Exception as exc:
-        record("route_failed", type(exc).__name__, metrics)
+        categories = {"search-scope-limit", "search-scope-unavailable", "search-evaluation-failed",
+                      "rg-unavailable", "read-timeout", "read-output-limit", "read-process-failed"}
+        reason = str(exc) if str(exc) in categories else type(exc).__name__
+        record("route_failed", reason, metrics)
         _debug(f"worker failed open: {exc}")
         return 0
     record("deny", "large-read", metrics)
@@ -152,7 +156,8 @@ def _format_worker_context(outcome: Any, ranges: list[list[tuple[str, int, int]]
     if ranges is not None:
         for index, spans in enumerate(ranges, 1):
             lines.append(f"Requested statement {index}: " + ", ".join(
-                f"{file}:{start}-{end} ({end - start + 1} lines)" for file, start, end in spans))
+                f"{file}:{start}-{end} ({end - start + 1} lines)" for file, start, end in spans[:20])
+                + (f"; {len(spans) - 20} additional ranges validated" if len(spans) > 20 else ""))
     lines.extend(["", result["summary"]])
     for finding in result["findings"][:20]:
         lines.append(

@@ -122,12 +122,19 @@ class RoutingRegressions(unittest.TestCase):
                 self.assertEqual(read_metrics(read, selection)["source_lines"], lines)
 
     def test_ripgrep_preserves_pattern_and_measures_matches(self):
+        def search_output(args, cwd, limit):
+            if "--json" in args:
+                return json.dumps({"type": "match", "data": {
+                    "path": {"text": str(self.root / "large.txt")}, "line_number": 1}}).encode()
+            return b"line\n" * 600
+
         with patch("codex_shunt.reads.shutil.which", return_value="/fake/rg"), \
-             patch("codex_shunt.reads.run_read_process", return_value=b"line\n" * 600) as rg:
+             patch("codex_shunt.reads.run_read_process", side_effect=search_output) as rg:
             output, run, _ = self.invoke("rg -n -F 'line' large.txt")
         self.assertTrue(output)
         self.assertIn('"pattern": "line"', run.call_args.kwargs["question"])
         self.assertIn("--no-config", rg.call_args.args[0])
+        self.assertEqual(run.call_args.kwargs["requested_ranges"], [[("large.txt", 1, 1)]])
 
 
 class ComparisonRegressions(unittest.TestCase):

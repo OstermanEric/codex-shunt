@@ -434,8 +434,13 @@ def _render_stats(
             row("Potential", (f"{coverage['estimated_unrouted_tokens']:,} unrouted input tokens", "value"),
                 (f"≈ {credits(coverage['estimated_unrouted_input_credits'])} comparison credits (gross est.)", "muted"))
         for item in coverage.get("by_feature", []):
+            if item["feature"].startswith(("rejected-option:", "pipeline:")):
+                row("Rejected", (item["feature"].replace(":", " ").replace("-", " "), "muted"),
+                    (f"· {item['calls']:,} calls", "value"))
+                continue
             row(item["feature"], (f"{item['calls']:,} calls · {item['routed']:,} routed", "value"),
-                (f"· {item['estimated_eligible_tokens']:,} eligible tokens (est.)", "muted"))
+                (f"· {item['estimated_eligible_tokens']:,} eligible / "
+                 f"{item.get('estimated_routed_tokens', 0):,} replaced tokens (est.)", "muted"))
         for item in coverage.get("by_reason", [])[:5]:
             row("Skip reason", (f"{item['reason'].replace('-', ' ')}: {item['calls']:,}", "muted"))
 

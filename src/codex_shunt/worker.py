@@ -250,6 +250,7 @@ def worker_limitation(result: dict[str, Any]) -> str:
 def _validate_result(
     result: dict[str, Any], workspace: Path, max_output_chars: int, approved_files: set[str],
     requested_ranges: list[list[tuple[str, int, int]]] | None = None,
+    search_statements: tuple[int, ...] = (),
 ) -> tuple[int, int]:
     encoded = json.dumps(result, ensure_ascii=False)
     if len(encoded) > max_output_chars:
@@ -310,9 +311,11 @@ def _validate_result(
         result["needs_escalation"] = True
         raise WorkerError(f"Codex Shunt validated {valid} of {len(findings)} worker citations")
     if requested_ranges is not None and not result["needs_escalation"]:
-        for spans in requested_ranges:
-            for filename, low, high in spans:
-                if not any(file == filename and low <= start <= end <= high for file, start, end in cited):
+        for index, spans in enumerate(requested_ranges):
+            groups = [spans] if index in search_statements and spans else [[span] for span in spans]
+            for group in groups:
+                if not any(file == filename and low <= start <= end <= high
+                           for filename, low, high in group for file, start, end in cited):
                     raise WorkerError("Worker omitted evidence for a requested source range")
     return len(findings), valid
 
@@ -327,6 +330,7 @@ def run_worker(
     turn_id: str | None = None,
     parent_model: str | None = None,
     requested_ranges: list[list[tuple[str, int, int]]] | None = None,
+    search_statements: tuple[int, ...] = (),
 ) -> WorkerOutcome:
     ensure_source_sharing_acknowledged(config)
     run_id = str(uuid.uuid4())
@@ -426,7 +430,7 @@ def run_worker(
             citation_count, valid_citations = _validate_result(
                 result, workspace, int(config["max_output_chars"]),
                 {item.relative.as_posix() for item in selection.files},
-                requested_ranges,
+                requested_ranges, search_statements,
             )
             validated = True
     except subprocess.TimeoutExpired as exc:

@@ -395,17 +395,23 @@ def _coverage(rows: list[dict[str, Any]], comparison_model: str) -> dict[str, An
     rows = [row for row in rows if row.get("measurement", "legacy") != "legacy"]
     eligible = {"deny", "would_route", "route_failed"}
 
-    def counts(items: list[dict[str, Any]]) -> dict[str, int]:
+    def counts(items: list[dict[str, Any]]) -> dict[str, Any]:
+        attempted = sum(row["decision"] in {"deny", "route_failed"} for row in items)
+        fallbacks = sum(row["decision"] == "route_failed" for row in items)
         return {
             "calls": len(items),
             "recognized": sum(row["decision"] != "unsupported" for row in items),
             "unsupported": sum(row["decision"] == "unsupported" for row in items),
             "below_threshold": sum(row["decision"] == "below_threshold" for row in items),
             "routed": sum(row["decision"] == "deny" for row in items),
+            "fallbacks": fallbacks,
+            "fallback_rate": fallbacks / attempted if attempted else None,
             "unmeasured": sum(row["measurement"] == "unmeasured" for row in items),
             "eligible": sum(row["decision"] in eligible for row in items),
             "estimated_eligible_tokens": sum(int(row["estimated_source_tokens"] or 0) for row in items
                                              if row["decision"] in eligible),
+            "estimated_routed_tokens": sum(int(row["estimated_source_tokens"] or 0) for row in items
+                                           if row["decision"] == "deny"),
             "estimated_unrouted_tokens": sum(int(row["estimated_source_tokens"] or 0) for row in items
                                              if row["decision"] in {"would_route", "route_failed"}),
         }

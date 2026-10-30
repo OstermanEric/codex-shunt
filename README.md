@@ -161,21 +161,26 @@ The pre-hook recognizes a deliberately small set of read-only shell commands:
 - `rg` over explicit files, directory roots, or the current directory when no
   root is supplied. Supported options are `-n`, `-i`, `-F`, their long forms,
   and repeated `-g` / `--glob` filters before or after the pattern, including
-  `-g'*.html'` and `--glob='*.html'`. Ripgrep resolves its own ignore/glob rules.
+  `-g'*.html'` and `--glob='*.html'`. Context options `-A`, `-B`, `-C` and their
+  long forms accept separate or attached nonnegative counts, such as `-C 3`,
+  `-C3`, and `--context=3`. Ripgrep resolves its own ignore/glob and context rules.
 - The same commands through `rtk` or `rtk proxy`.
 
 PowerShell `Get-Content` (also `gc`, `cat`, or `type`) supports literal file arrays
 and bounded wildcards, positional paths or `-Path` / `-LiteralPath`, and optional
 `-Raw`, `-TotalCount N`, `-Tail N`, or `-Encoding UTF8`. It also recognizes the
 line-producing pipeline `| Select-Object -Skip N -First M`; either bound may be
-omitted. For example:
+omitted. Up to 16 successive Select-Object/select stages are supported, with
+each stage applied in order. Prefer the combined form for simple slices.
+For known UTF-8 files, specify the encoding explicitly:
 
 ```powershell
-Get-Content -LiteralPath 'src\large file.py'
-Get-Content -LiteralPath 'src\large file.py' -TotalCount 600
+Get-Content -LiteralPath 'src\large file.py' -Encoding UTF8
+Get-Content -LiteralPath 'src\large file.py' -TotalCount 600 -Encoding UTF8
 Get-Content test.htm, example.html -Encoding UTF8
 Get-Content '*.html' -Encoding UTF8
-Get-Content test.html | Select-Object -Skip 100 -First 400
+Get-Content -LiteralPath 'test.html' -Encoding UTF8 | Select-Object -Skip 100 -First 400
+Get-Content -LiteralPath 'test.html' -Encoding UTF8 | Select-Object -Skip 100 | Select-Object -First 400
 ```
 
 For line reads, Shunt calculates source ranges before launching Luna. For example,
@@ -183,6 +188,14 @@ For line reads, Shunt calculates source ranges before launching Luna. For exampl
 units and resolved ranges; citations must stay inside those ranges, with evidence
 for every nonempty selected range. These checks verify scope, not the truth or
 completeness of a summary; the primary model still verifies material claims.
+
+For rg searches, native structured output resolves the actual match/context
+lines. Citations must stay inside those ranges, including gaps between groups;
+each nonempty search statement requires at least one in-scope finding. Summaries
+must still cover all returned matches. Resolution is bounded to 10,000
+match/context records per statement and 512 merged ranges per batch. Oversized
+scopes and batches mixing rg with byte reads, Raw reads or Select-String run
+directly. Ordinary zero-result searches stay below the routing threshold.
 
 `Select-String` / `sls` supports `-Pattern`, `-Path` / `-LiteralPath`, literal path
 arrays or wildcards, `-SimpleMatch`, `-CaseSensitive`, and UTF-8 encodings. Its
@@ -196,6 +209,9 @@ Independent supported reads separated by newlines or semicolons form one ordered
 batch. Every statement must be supported; one worker handles the whole batch.
 Repeated reads count toward requested output even when source copies are shared.
 A 400-line slice remains direct unless it reaches the byte threshold.
+Use literal paths and keep labels in the surrounding explanation: adding
+`Write-Output 'label'` makes a whole batch run directly, as do assignments and
+variable evaluation.
 If Luna escalates, the entire original batch proceeds. This is a fallback, not
 a successful interception.
 
@@ -315,6 +331,20 @@ and the most frequent skip reasons. Use `shunt stats --since 7d --json` for the
 complete `coverage.by_family`, `coverage.by_feature`, and `coverage.by_reason`
 breakdowns. Features can overlap within one call.
 
+Version **0.4.0** adds fixed `rejected-option:<family>:<name>` and
+`pipeline:<shape>` feature tags. Known rejected options are allowlisted and
+canonicalized; unknown names become `other`. Values, command text and paths are
+never stored. Existing reason categories, including `encoding-ambiguous`, remain
+separate from these finer diagnostics. Historical failures cannot be reclassified.
+
+Coverage totals and family/feature breakdowns also expose
+`estimated_routed_tokens`, `fallbacks`, and `fallback_rate` in JSON. The rate is
+failed hook replacements divided by attempted replacements (routed plus failed),
+or null when none were attempted; observations while routing is off are excluded.
+Text feature rows show eligible and successfully replaced output-token estimates.
+Read these alongside worker time, fallback counts and checked summary quality.
+Primary retries and semantic quality are not automatically measured.
+
 Coverage starts with observations recorded by version **0.3.0**; older telemetry
 is preserved but excluded from its denominator. Read candidates are recognized
 command names, not every shell call or an exhaustive inventory of script reads.
@@ -386,7 +416,9 @@ replacement summaries, verification, or retries, so it is not net tokens saved.
 
 ## Development
 
-Version **0.3.1** adds resolved line-range validation, explicit metrics availability,
+Version **0.4.0** adds Windows skill recipes, ordered chained line selections,
+rg context searches with resolved citation scopes, and finer coverage diagnostics.
+Version **0.3.1** added resolved line-range validation, explicit metrics availability,
 and diagnostics for omitted hook workdirs. See the
 [user-report investigation](docs/user-report-investigation.md) for validation and
 remaining limitations.

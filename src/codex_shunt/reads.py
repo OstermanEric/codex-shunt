@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import glob
 import json
 import os
@@ -32,10 +33,13 @@ class Recognition:
     read: Read | None
     family: str
     reason: str = ""
+    features: tuple[str, ...] = ()
 
 
 class ReadError(ValueError):
-    pass
+    def __init__(self, reason: str, features: tuple[str, ...] = ()):
+        super().__init__(reason)
+        self.features = features
 
 
 @dataclass(frozen=True)
@@ -49,6 +53,35 @@ class Token:
 _READ_NAMES = r"get-content|gc|cat|type|head|tail|sed|rg|select-string|sls|get-childitem|gci|dir|ls"
 _CANDIDATE = re.compile(r"(?:^|[;\r\n|])\s*(?:rtk\s+(?:proxy\s+)?)?(?:[^\s;|]*/)?(" +
                         _READ_NAMES + r")(?=\s|$)", re.I)
+
+# Only these fixed names can enter telemetry. Never retain an unknown flag,
+# attached value, operand, or text copied from a rejected command.
+_DIAGNOSTIC_OPTIONS = {
+    "rg": {"-S": "smart-case", "--smart-case": "smart-case", "-w": "word-regexp",
+           "--word-regexp": "word-regexp", "-e": "regexp", "--regexp": "regexp",
+           "-l": "files-with-matches", "--files-with-matches": "files-with-matches",
+           "--files": "files", "--hidden": "hidden", "--pre": "pre",
+           "-m": "max-count", "--max-count": "max-count", "--type": "type", "-t": "type",
+           "-A": "after-context", "--after-context": "after-context",
+           "-B": "before-context", "--before-context": "before-context",
+           "-C": "context", "--context": "context"},
+    "get-content": {"-readcount": "read-count", "-wait": "wait", "-delimiter": "delimiter",
+                    "-asbytestream": "byte-stream", "-encoding": "encoding"},
+    "select-string": {"-context": "context", "-allmatches": "all-matches", "-list": "list",
+                      "-quiet": "quiet", "-notmatch": "not-match", "-encoding": "encoding"},
+    "select-object": {"-last": "last", "-index": "index", "-skiplast": "skip-last",
+                      "-unique": "unique", "-skip": "skip", "-first": "first"},
+}
+
+
+def _option_error(reason: str, family: str, token: Token) -> ReadError:
+    value = token.value.split("=", 1)[0]
+    if family != "rg":
+        value = value.lower()
+    elif re.fullmatch(r"-[ABCm]\d+", value):
+        value = value[:2]
+    name = _DIAGNOSTIC_OPTIONS.get(family, {}).get(value) if not token.quoted else None
+    return ReadError(reason, (f"rejected-option:{family}:{name or 'other'}",))
 
 
 def _shell(shell: str | None) -> tuple[bool, str]:
@@ -125,6 +158,7 @@ def recognize_read(command: str, cwd: Path, max_files: int, shell: str | None = 
     family = {"gc": "get-content", "sls": "select-string", "gci": "get-childitem"}.get(family, family)
     if len(command) > 65536:
         return Recognition(None, family, "command-limit")
+    features: set[str] = set()
     try:
         powershell, engine = _shell(shell)
         tokens = _tokens(command, powershell)
@@ -141,6 +175,8 @@ def recognize_read(command: str, cwd: Path, max_files: int, shell: str | None = 
             groups.pop()
         if not groups or len(groups) > 64:
             raise ReadError("statement-limit" if groups else "unsupported-command")
+        if len(groups) > 1:
+            features.add("batch")
         # Validate all statements before filesystem enumeration or subprocesses.
         steps = tuple(_statement(group, powershell, engine) for group in groups)
         steps = tuple(_resolve(step, cwd, max_files, powershell, engine) for step in steps)
@@ -154,7 +190,7 @@ def recognize_read(command: str, cwd: Path, max_files: int, shell: str | None = 
                         tuple(sorted({"batch", *(feature for step in steps for feature in step.features)})), steps)
         return Recognition(read, read.family)
     except ReadError as exc:
-        return Recognition(None, family, str(exc))
+        return Recognition(None, family, str(exc), tuple(sorted(features | set(exc.features))))
     except Exception:
         return Recognition(None, family, "resolution-failed")
 
@@ -191,11 +227,21 @@ def _statement(tokens: list[Token], powershell: bool, engine: str) -> Read:
             raise ReadError("unsupported-syntax")
         read = _native_read(words, name, powershell)
     if len(stages) > 1:
-        if (not powershell or read.family != "get-content" or len(stages) != 2
-                or read.operation.get("raw")):
-            raise ReadError("unsupported-pipeline")
-        read.operation["slice"] = _slice(stages[1])
-        read = replace(read, features=(*read.features, "line-slice"))
+        shape = "raw-line-selection" if read.operation.get("raw") else "unsupported-stage"
+        if not powershell or read.family != "get-content" or read.operation.get("raw"):
+            raise ReadError("unsupported-pipeline", (f"pipeline:{shape}",))
+        if len(stages) > 17:
+            raise ReadError("pipeline-limit", ("pipeline:selection-limit",))
+        try:
+            slices = [_slice(stage) for stage in stages[1:]]
+        except ReadError as exc:
+            raise ReadError(str(exc), (*exc.features, "pipeline:unsupported-selection")) from exc
+        if len(slices) == 1:
+            read.operation["slice"] = slices[0]
+        else:
+            read.operation["slices"] = slices
+        read = replace(read, features=(*read.features, "line-slice",
+                                      *(("chained-line-slice",) if len(slices) > 1 else ())))
     return read
 
 
@@ -209,10 +255,10 @@ def _slice(words: list[Token]) -> dict[str, int]:
         flag = token.value.lower().removeprefix("-")
         if (token.quoted or token.kind != "word" or not token.value.startswith("-")
                 or flag not in {"skip", "first"} or flag in values or not words):
-            raise ReadError("unsupported-pipeline")
+            raise _option_error("unsupported-pipeline", "select-object", token)
         value = words.pop(0)
         if value.kind != "word" or not re.fullmatch(r"\d{1,10}", value.value) or int(value.value) > 2147483647:
-            raise ReadError("unsupported-pipeline")
+            raise _option_error("unsupported-pipeline", "select-object", token)
         values[flag] = int(value.value)
     if not values:
         raise ReadError("unsupported-pipeline")
@@ -258,7 +304,7 @@ def _powershell_read(words: list[Token], name: str, engine: str) -> Read:
             literal = flag == "-literalpath"
         elif flag == "-encoding":
             if not words or words[0].value.lower() not in {"utf8", "utf8bom", "utf8nobom"}:
-                raise ReadError("unsupported-encoding")
+                raise _option_error("unsupported-encoding", "select-string" if search else "get-content", token)
             encoding = words.pop(0).value.lower()
             if engine == "powershell" and encoding != "utf8":
                 raise ReadError("unsupported-encoding")
@@ -280,7 +326,7 @@ def _powershell_read(words: list[Token], name: str, engine: str) -> Read:
         elif search and flag in {"-simplematch", "-casesensitive"}:
             operation["simple" if flag == "-simplematch" else "case_sensitive"] = True
         elif token.value.startswith("-") or paths:
-            raise ReadError("unsupported-parameter")
+            raise _option_error("unsupported-parameter", "select-string" if search else "get-content", token)
         else:
             words.insert(0, token)
             paths = _array(words)
@@ -352,8 +398,18 @@ def _rg_read(words: list[Token], powershell: bool) -> Read:
             globs.append(words.pop(0).value)
         elif options and (value.startswith("--glob=") or value.startswith("-g") and len(value) > 2):
             globs.append(value.split("=", 1)[1] if value.startswith("--glob=") else value[2:])
+        elif options and (value in {"-A", "-B", "-C", "--after-context", "--before-context", "--context"}
+                          or re.match(r"^-[ABC].+|^--(?:after-context|before-context|context)=", value)):
+            match = re.fullmatch(r"(-[ABC])(.+)|(--(?:after-context|before-context|context))=(.*)", value)
+            if match:
+                flag, count = (match[1], match[2]) if match[1] else (match[3], match[4])
+            else:
+                flag, count = value, words.pop(0).value if words else ""
+            if not re.fullmatch(r"\d{1,10}", count) or int(count) > 2147483647:
+                raise _option_error("unsupported-parameter", "rg", token)
+            flags.extend([flag, count])
         elif options and value.startswith("-"):
-            raise ReadError("unsupported-parameter")
+            raise _option_error("unsupported-parameter", "rg", token)
         elif pattern is None:
             if not value or (not powershell and token.expand and glob.has_magic(value)):
                 raise ReadError("evaluation-or-escape")
@@ -364,7 +420,9 @@ def _rg_read(words: list[Token], powershell: bool) -> Read:
         raise ReadError("unsupported-parameter")
     operation: dict[str, object] = {"command": "rg", "pattern": pattern, "flags": flags,
                                     "globs": globs, "operands": operands}
-    return Read((), operation, "rg", ("glob-filter",) if globs else ())
+    features = (("glob-filter",) if globs else ()) + (("context-search",) if any(
+        flag in {"-A", "-B", "-C", "--after-context", "--before-context", "--context"} for flag in flags) else ())
+    return Read((), operation, "rg", features)
 
 
 def _inside(path: Path, cwd: Path) -> Path:
@@ -517,11 +575,12 @@ def _chunks(read: Read, cwd: Path, output_limit: int) -> Iterator[bytes]:
                 data = units if operation["unit"] == "bytes" else b"".join(units)
             yield data
 
-    if "slice" in operation:
+    if "slice" in operation or "slices" in operation:
         lines = (line for chunk in file_chunks() for line in chunk.splitlines(keepends=True))
-        bounds = operation["slice"]
-        start = bounds["skip"]
-        yield from islice(lines, start, start + bounds["first"] if "first" in bounds else None)
+        for bounds in operation.get("slices", [operation.get("slice", {})]):
+            start = bounds["skip"]
+            lines = islice(lines, start, start + bounds["first"] if "first" in bounds else None)
+        yield from lines
     else:
         yield from file_chunks()
 
@@ -539,17 +598,74 @@ def read_metrics(read: Read, selection: SourceSelection) -> dict[str, int]:
             "source_lines": lines, "estimated_source_tokens": (size + 3) // 4}
 
 
+def _rg_ranges(read: Read, selection: SourceSelection) -> list[tuple[str, int, int]]:
+    """Resolve native match/context lines without parsing human filename prefixes."""
+    executable = shutil.which("rg")
+    if not executable:
+        raise ValueError("rg-unavailable")
+    output = run_read_process([executable, "--no-config", "--json", "--color=never",
+                               *read.operation["flags"], "--", str(read.operation["pattern"]),
+                               *(str(path) for path in read.paths)], selection.root,
+                              min(8_000_000, max(1_000_000, selection.source_bytes * 16)))
+    counts = {item.source: item.lines for item in selection.files}
+    hits: dict[Path, set[int]] = {}
+    records = 0
+    for line in output.splitlines():
+        event = json.loads(line)
+        if event["type"] == "end" and event["data"].get("binary_offset") is not None:
+            raise ValueError("search-evaluation-failed")
+        if event["type"] not in {"match", "context"}:
+            continue
+        records += 1
+        if records > 10000:
+            raise ValueError("search-scope-limit")
+        data = event["data"]
+        path_data = data["path"]
+        name = path_data.get("text")
+        if name is None:
+            name = os.fsdecode(base64.b64decode(path_data["bytes"], validate=True))
+        path = (selection.root / name).resolve()
+        number = data["line_number"]
+        if path not in read.paths or type(number) is not int or not 1 <= number <= counts[path]:
+            raise ValueError("search-evaluation-failed")
+        hits.setdefault(path, set()).add(number)
+    spans: list[tuple[str, int, int]] = []
+    for path, numbers in hits.items():
+        filename = path.relative_to(selection.root).as_posix()
+        for number in sorted(numbers):
+            if spans and spans[-1][0] == filename and spans[-1][2] + 1 == number:
+                spans[-1] = (filename, spans[-1][1], number)
+            else:
+                spans.append((filename, number, number))
+        if len(spans) > 512:
+            raise ValueError("search-scope-limit")
+    return spans
+
+
+def search_statement_indices(read: Read) -> tuple[int, ...]:
+    return tuple(index for index, step in enumerate(read.steps or (read,))
+                 if step.operation["command"] == "rg")
+
+
 def requested_line_ranges(read: Read, selection: SourceSelection) -> list[list[tuple[str, int, int]]] | None:
     """Resolve line reads locally; never ask a model to interpret Skip/First.
 
-    Byte reads and searches retain their existing operation representation.
+    rg uses native structured match/context output. Unscoped byte/Raw/Select-String
+    reads remain direct when combined with rg; they must not disable its checks.
     Each inner list is one ordered statement, including repeated file reads.
     """
+    searches = search_statement_indices(read)
+    if searches and any(step.operation["command"] == "select-string" or step.operation.get("unit") == "bytes"
+                        or step.operation.get("raw") for step in read.steps or (read,)):
+        raise ValueError("search-scope-unavailable")
     counts = {item.source: item.lines for item in selection.files}
     result = []
     for step in read.steps or (read,):
         op = step.operation
-        if op["command"] in {"rg", "select-string"} or op.get("unit") == "bytes" or op.get("raw"):
+        if op["command"] == "rg":
+            result.append(_rg_ranges(step, selection))
+            continue
+        if op["command"] == "select-string" or op.get("unit") == "bytes" or op.get("raw"):
             return None
         spans = []
         for path in step.paths:
@@ -567,20 +683,22 @@ def requested_line_ranges(read: Read, selection: SourceSelection) -> list[list[t
                 else:
                     start = max(count - abs(number), 0) if number else count
             spans.append((path.relative_to(selection.root).as_posix(), start, stop))
-        bounds = op.get("slice", {})
-        skip = int(bounds.get("skip", 0))
-        remaining = int(bounds["first"]) if "first" in bounds else sum(stop - start for _, start, stop in spans)
-        selected = []
-        for filename, start, stop in spans:
-            length = stop - start
-            offset = min(skip, length)
-            skip -= offset
-            start += offset
-            stop = min(stop, start + remaining)
-            if start < stop:
-                selected.append((filename, start + 1, stop))
-                remaining -= stop - start
-        result.append(selected)
+        for bounds in op.get("slices", [op.get("slice", {})]):
+            skip = int(bounds.get("skip", 0))
+            remaining = int(bounds["first"]) if "first" in bounds else sum(stop - start for _, start, stop in spans)
+            selected = []
+            for filename, start, stop in spans:
+                offset = min(skip, stop - start)
+                skip -= offset
+                start += offset
+                stop = min(stop, start + remaining)
+                if start < stop:
+                    selected.append((filename, start, stop))
+                    remaining -= stop - start
+            spans = selected
+        result.append([(filename, start + 1, stop) for filename, start, stop in spans])
+    if searches and sum(len(spans) for spans in result) > 512:
+        raise ValueError("search-scope-limit")
     return result
 
 
@@ -595,7 +713,9 @@ def read_question(read: Read, root: Path, requested_ranges: list[list[tuple[str,
         scope = (
             "The host has resolved the requested source ranges below. Line numbers are 1-based and inclusive. "
             "Skip and First count LINE OBJECTS, never characters or bytes. Summarize the whole selected text, "
-            "not just its opening characters. Include evidence from every nonempty statement and selected file range; "
+            "not just its opening characters. For line reads, include evidence from every selected file range. "
+            "For each nonempty rg statement, include at least one finding within its match/context ranges, "
+            "and summarize all returned matches; citations must never cross an unselected gap. "
             "escalate if you cannot inspect the complete selection. Resolved ranges by statement: "
             + json.dumps(requested_ranges, ensure_ascii=False) + ". "
         )

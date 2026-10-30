@@ -54,6 +54,49 @@ Never pass `.env` files, private keys, credentials, tokens, keychains, or other
 secrets. The runner also filters common secret-bearing paths and copies approved
 text files into an isolated temporary workspace before starting Luna.
 
+## Generate compatible read commands
+
+For Windows repository files known to be UTF-8, use single-quoted literal paths
+and explicit encoding. Windows PowerShell otherwise uses a legacy encoding for
+non-ASCII files without a BOM. Do not force UTF-8 onto files with another encoding.
+
+```powershell
+Get-Content -LiteralPath 'src\example.py' -Encoding UTF8
+Get-Content -LiteralPath 'src\example.py' -Encoding UTF8 | Select-Object -Skip 100 -First 500
+Get-Content -LiteralPath 'src\first.py','src\second.py' -Encoding UTF8
+```
+
+Prefer one combined Skip/First stage. Up to 16 successive Select-Object/select
+stages using only nonnegative Skip/First are also supported, applied in order:
+
+```powershell
+Get-Content -LiteralPath 'src\example.py' -Encoding UTF8 | Select-Object -Skip 100 | Select-Object -First 500
+```
+
+Keep batches to supported reads. Labels such as Write-Output, assignments,
+variable expansion, or arbitrary pipeline stages make the whole call run directly.
+Keep labels in your explanation rather than inserting them into shell commands.
+
+For context searches, use supported basic rg flags and explicit roots/globs:
+
+```bash
+rg -n -C 3 'pattern' src
+rg -n --before-context=2 --after-context=4 'pattern' src
+```
+
+Attached forms such as -C3 and --context=3 are supported, including options after
+the pattern. Small results still run directly. Search citations are restricted
+to the actual match/context lines, preserving gaps between result groups.
+An rg batch containing byte reads, Raw reads or Select-String runs directly
+because those operations do not yet share the resolved search-scope contract.
+
+Start chats in the intended project. When the hook is missing a separate workdir,
+use explicit inspect rather than widening the root or guessing another directory:
+
+```powershell
+py -3 -X utf8 '<resolved-plugin-root>\scripts\codex-shunt' inspect --root 'C:\project' --question 'Where is routing configured?' 'src'
+```
+
 ## Strict routing
 
 Strict routing defaults to true; source-sharing acknowledgement is still required
@@ -69,7 +112,11 @@ not prevent a valid result. Unsupported shell commands also run normally.
 For line reads, the hook calculates source ranges before launching Luna and
 validates citations against those ranges. `-Skip 50 -First 500` selects lines
 51–550, not characters. Each nonempty selected range in a line-only batch needs
-cited evidence. These checks validate scope; the primary model must still verify
+cited evidence. rg resolves native match/context ranges and requires at least one
+in-scope finding per nonempty search statement, rather than one per match group.
+Search resolution is bounded to 10,000 match/context records per statement and
+512 merged ranges per batch; exceeding either limit allows the original call.
+These checks validate scope; the primary model must still verify
 material claims and summary completeness. An escalating batch allows the entire
 original call and counts as a fallback, not a successful interception.
 
@@ -156,6 +203,14 @@ failed elsewhere. Report incomplete data explicitly. Text reports show the same
 distinction. If sandbox restrictions hide stores, retry stats once with scoped
 host access; stats is read-only and does not launch Luna. Even `complete` covers
 only the explicit scope or discovered stores, not stores hidden without an error.
+
+Coverage JSON exposes estimated_routed_tokens, fallbacks and fallback_rate overall
+and by family/feature. The rate covers attempted hook replacements (routed plus
+failed), excluding routing-off observations. Rejected-option and pipeline feature
+tags use fixed allowlisted names; unknown options are grouped as other. They never
+retain option values, commands or paths. Compare replaced output, worker time,
+fallbacks and verified summary quality; recognition and gross tokens alone do not
+prove end-to-end savings. Primary retries and semantic quality are not measured.
 
 ## Routing boundaries
 
